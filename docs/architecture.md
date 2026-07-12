@@ -36,16 +36,20 @@ signer chain so `Verify` can validate it against the caller's roots.
 3. For each `SignerInfo`:
    1. **Resolve the signer certificate** by `IssuerAndSerialNumber` or, for the
       `[0]` form, `SubjectKeyIdentifier`.
-   2. **Check the messageDigest attribute** equals `H(content)` with the signer's
-      digest algorithm, and require the `contentType` attribute to be present
-      (RFC 5652 §5.4).
+   2. **Check the signed attributes** (RFC 5652 §5.4): the `messageDigest`
+      attribute equals `H(content)` with the signer's digest algorithm, and the
+      `contentType` attribute value equals the encapsulated content type.
    3. **Verify the signature over the signed attributes.** The attributes are
       stored `[0] IMPLICIT` but signed as a universal `SET OF`; the tag byte is
       swapped from `0xA0` to `0x31` (IMPLICIT tagging replaces only the tag, so
       the length and contents are unchanged) and that DER is hashed and verified.
-   4. **Verify the chain** to the caller's root pool at `now`
-      (`x509.Certificate.Verify`).
-4. Succeed if any signer verifies; return the verified certificates.
+   4. **Verify the chain** with the caller's `x509.VerifyOptions`
+      (`x509.Certificate.Verify`). `Verify` supplies the roots and clock;
+      `VerifyWith` lets the caller control roots, intermediates, key usages, and
+      time. Certificates carried in the SignedData are added as intermediates
+      when the caller supplies none, so leaf→intermediate→root chains verify.
+4. Succeed if any signer verifies; return the verified certificates. Revocation
+   is a caller step on the returned certificate (see the trade-off table).
 
 ## Sign flow
 
@@ -62,7 +66,7 @@ signer chain so `Verify` can validate it against the caller's roots.
 | Signed-attrs re-encoding | Swap `0xA0`→`0x31` on the captured bytes | The exact bytes the signer hashed; avoids re-marshal drift |
 | SET OF ordering (Sign) | Sort attribute encodings before concatenating | DER `SET OF` requires sorted elements (interop) |
 | Signature algorithm | Chosen from the signer's public-key type; digest from `digestAlgorithm` | Matches how CMS separates digest and signature algorithms |
-| Revocation | Not checked | Delegated to the caller's `x509.VerifyOptions`; keeps the package focused |
+| Revocation | Not checked; a caller step on the returned signer cert (CRL/OCSP) | Go's `x509.VerifyOptions` has no revocation facility, and revocation policy is caller territory — keeps the package focused (see README §Revocation, `example/revoke`) |
 | Content in memory | `[]byte` content and signature | Root-anchors and manifests are small; streaming is unneeded |
 
 ## Why standard-library-only is feasible here

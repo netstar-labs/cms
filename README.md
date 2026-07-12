@@ -30,6 +30,12 @@ Sign(content, cert, key, opts) ─▶ detached SignedData DER
 // some signer must verify over the content, chain to roots, and be valid at now.
 func Verify(content, sig []byte, roots *x509.CertPool, now time.Time) ([]*x509.Certificate, error)
 
+// VerifyWith is Verify with caller-controlled chain verification. Certificates
+// carried in the SignedData are added as intermediates when opts.Intermediates
+// is nil. Use it to set KeyUsages/Intermediates and to drive a revocation policy
+// on the returned signer (see Revocation below).
+func VerifyWith(content, sig []byte, opts x509.VerifyOptions) ([]*x509.Certificate, error)
+
 // Sign produces a detached CMS SignedData over content, signed by cert/key with
 // signed attributes (contentType, messageDigest, optional signingTime).
 func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOptions) ([]byte, error)

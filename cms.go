@@ -10,6 +10,7 @@
 package cms
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rand"
@@ -20,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"time"
 )
 
@@ -184,7 +186,7 @@ func verifySigner(si signerInfo, content []byte, eContentType asn1.ObjectIdentif
 		if err != nil {
 			return nil, err
 		}
-		if !bytesEqual(md, digest(h, content)) {
+		if !bytes.Equal(md, digest(h, content)) {
 			return nil, errors.New("cms: messageDigest attribute mismatch")
 		}
 		if !ct.Equal(eContentType) {
@@ -282,7 +284,7 @@ func findCert(certs []*x509.Certificate, sid asn1.RawValue) *x509.Certificate {
 	// SubjectKeyIdentifier form is [0] IMPLICIT OCTET STRING.
 	if sid.Class == asn1.ClassContextSpecific && sid.Tag == 0 {
 		for _, c := range certs {
-			if bytesEqual(c.SubjectKeyId, sid.Bytes) {
+			if bytes.Equal(c.SubjectKeyId, sid.Bytes) {
 				return c
 			}
 		}
@@ -294,7 +296,7 @@ func findCert(certs []*x509.Certificate, sid asn1.RawValue) *x509.Certificate {
 		return nil
 	}
 	for _, c := range certs {
-		if c.SerialNumber.Cmp(is.SerialNumber) == 0 && bytesEqual(c.RawIssuer, is.Issuer.FullBytes) {
+		if c.SerialNumber.Cmp(is.SerialNumber) == 0 && bytes.Equal(c.RawIssuer, is.Issuer.FullBytes) {
 			return c
 		}
 	}
@@ -317,18 +319,6 @@ func digest(h crypto.Hash, b []byte) []byte {
 	hh := h.New()
 	hh.Write(b)
 	return hh.Sum(nil)
-}
-
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // ---- signing --------------------------------------------------------------
@@ -406,7 +396,7 @@ func marshalAttributeSet(attrs []attribute) ([]byte, error) {
 		}
 		encoded = append(encoded, b)
 	}
-	sortByteSlices(encoded)
+	slices.SortFunc(encoded, bytes.Compare)
 	var body []byte
 	for _, e := range encoded {
 		body = append(body, e...)
@@ -483,21 +473,4 @@ func tlvHeader(tag byte, length int) []byte {
 		length >>= 8
 	}
 	return append([]byte{tag, byte(0x80 | len(lb))}, lb...)
-}
-
-func sortByteSlices(s [][]byte) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && less(s[j], s[j-1]); j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
-}
-
-func less(a, b []byte) bool {
-	for i := 0; i < len(a) && i < len(b); i++ {
-		if a[i] != b[i] {
-			return a[i] < b[i]
-		}
-	}
-	return len(a) < len(b)
 }

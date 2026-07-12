@@ -63,9 +63,11 @@ embedded so a verifier can build the chain.
 - **Trusted roots are your responsibility.** Ship the expected root certificate
   with the binary (or pin it); do not fetch it over the same channel as the
   signed content.
-- **Revocation** is not checked. If needed, pre-validate the chain yourself with
-  `x509.VerifyOptions` including your CRL/OCSP policy, or check the returned
-  signer certificate.
+- **Revocation** is not checked, and `x509.VerifyOptions` has no revocation
+  facility. If you need it, use `VerifyWith` to drive the chain build, then check
+  the returned signer certificate against a CRL (`x509.ParseRevocationList`) or an
+  OCSP responder and reject if revoked. See the README §Revocation and
+  `example/revoke`.
 - **Clock.** `Verify` enforces certificate validity at the `now` you pass — use a
   trustworthy (NTP-synced) clock; a wrong clock can accept an expired chain or
   reject a valid one.
