@@ -58,11 +58,64 @@ embedded so a verifier can build the chain.
 | Digest | SHA-256, SHA-384, SHA-512 |
 | Signer id | IssuerAndSerialNumber, SubjectKeyIdentifier |
 
+## Supplying the trust roots
+
+`Verify` takes a `*x509.CertPool` you assemble — `cms` never fetches or implies a
+root. **The bootstrap trust always originates out of band: `cms` moves the trust
+root, it does not remove the need for one.** How that root reaches the binary is
+the crux of the whole trust model; pick one of three delivery models.
+
+**1. Embed in the binary** (recommended for a fixed, known issuer). `go:embed` the
+PEM and parse it. The root's authenticity is then exactly the binary's — no
+separate distribution or verification step, and it works offline / air-gapped.
+Rotate by shipping a new binary when the root changes (rare — e.g. the ICANN Root
+CA is valid to 2029); embed the *next* root alongside the current one for a
+seamless rollover. (This is how `aegis` ships the ICANN Root CA for the DNSSEC
+anchor bootstrap.)
+
+```go
+//go:embed roots/icannbundle.pem
+var rootPEM []byte
+
+pool := x509.NewCertPool()
+pool.AppendCertsFromPEM(rootPEM)
+signers, err := cms.Verify(content, sig, pool, time.Now())
+```
+
+**2. Install from a trusted channel** (config path / signed package). Place the
+PEM at a known path via your provisioning system — configuration management, a
+**signed** OS package, or an immutable image — and load it at startup. Trust then
+comes from the channel that placed it: make the path root-owned and read-only, and
+never let the artifact and its signed content arrive over the *same*
+unauthenticated channel. Good when the root varies per deployment or tenant.
+
+```go
+pem, err := os.ReadFile("/etc/netstar/roots.pem") // placed by provisioning
+pool := x509.NewCertPool()
+pool.AppendCertsFromPEM(pem)
+```
+
+**3. OS trust store** (`x509.SystemCertPool()`). Use the system pool when the
+signer chains to a publicly-trusted CA already in the OS store — e.g. a vendor
+signing with a WebPKI / code-signing chain. Broadest and zero-config, but you
+inherit the OS store's entire trust set, so constrain it: pass restrictive
+`KeyUsages` via `VerifyWith` and/or check the returned signer's name/EKU when the
+issuer should be a specific one. **Not** appropriate for a private or self-issued
+signer — it won't be in the store.
+
+```go
+pool, _ := x509.SystemCertPool()
+signers, err := cms.VerifyWith(content, sig, x509.VerifyOptions{
+    Roots: pool, CurrentTime: time.Now(),
+    KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}, // constrain the store
+})
+```
+
+Whichever model, enforce certificate validity at a trustworthy (NTP-synced) clock
+(next note).
+
 ## Operational notes
 
-- **Trusted roots are your responsibility.** Ship the expected root certificate
-  with the binary (or pin it); do not fetch it over the same channel as the
-  signed content.
 - **Revocation** is not checked, and `x509.VerifyOptions` has no revocation
   facility. If you need it, use `VerifyWith` to drive the chain build, then check
   the returned signer certificate against a CRL (`x509.ParseRevocationList`) or an
