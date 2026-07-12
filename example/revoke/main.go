@@ -1,3 +1,6 @@
+// Copyright (C) 2026 zxdev
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Command revoke demonstrates revocation checking on top of cms.Verify.
 //
 // Go's x509.VerifyOptions has no revocation facility, so revocation is a step

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 zxdev
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Command verify checks a detached CMS signature over a file against a PEM root
 // bundle. Exit 0 and print the signer on success; exit 1 with the error on
 // failure.

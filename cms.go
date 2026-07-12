@@ -1,3 +1,6 @@
+// Copyright (C) 2026 zxdev
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Package cms verifies and produces detached CMS/PKCS#7 SignedData signatures
 // (RFC 5652) using only the Go standard library. It is a deliberately small,
 // audited subset — detached SignedData over externally supplied content, with

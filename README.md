@@ -137,3 +137,8 @@ if crl.CheckSignatureFrom(caCert) == nil { // trust the CRL first
 (For OCSP instead of CRLs, query the responder for the returned signer certificate
 and reject on a `Revoked` status; OCSP lives in `golang.org/x/crypto/ocsp`, so
 adopt it only if you accept that `x/` dependency.)
+
+## License
+
+Copyright (C) 2026 zxdev. Licensed under the GNU General Public License v3.0 or
+later — see [LICENSE](LICENSE).
