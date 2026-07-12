@@ -11,23 +11,31 @@ vendors to sign data files, feeds, and update manifests.
 
 ## Why it exists
 
-The `aegis` resolver's RFC 5011 / RFC 9718 trust-anchor bootstrap is blocked
-without this primitive: IANA distributes the DNSSEC root anchors with a detached
-CMS signature (`root-anchors.p7s`) chaining to the ICANN CA, and there is no
-stdlib way to verify it. Rather than vendor a heavyweight third-party PKCS#7
-library (and take on its CGo/attack surface) or duplicate a verifier inside every
-consumer, `cms` is the single netstar-labs-owned, audited implementation that
-`aegis` and its siblings import.
+netstar-labs produces and consumes signed data across the platform, and needs one
+audited way to prove a signed blob is authentic. The gap is specifically detached
+CMS: many producers (OpenSSL, IANA, common signing tools) emit a detached
+`.p7s` over a data file, and there is no stdlib primitive to verify it. Rather
+than vendor a heavyweight third-party PKCS#7 library (and take on its CGo/attack
+surface) or duplicate a verifier inside every consumer, `cms` is the single
+netstar-labs-owned, standard-library-only implementation that any repo imports.
+
+The canonical example is the DNSSEC trust-anchor bootstrap (RFC 5011 / RFC 9718):
+IANA distributes the root anchors with a detached CMS signature
+(`root-anchors.p7s`) chaining to the ICANN CA, and verifying it was previously
+impossible with the standard library alone — the concrete gap this package fills.
 
 ## What it enables
 
-- **DNSSEC trust-anchor bootstrap** (`aegis`): authenticate `root-anchors.xml`
-  against `root-anchors.p7s` and the ICANN root, closing the last gap in RFC 5011
-  automated anchor management.
-- **Signed data across the platform**: verify signed feed/RPZ bundles, signed
-  `refs` resources, and update manifests — and, via `Sign`, *produce* them, so
-  netstar-labs can close the supply-chain-integrity loop end to end (sign at the
-  source, verify at every consumer).
+- **Signed data across the platform.** Verify — and, via `Sign`, *produce* —
+  signed feed/RPZ bundles, `refs` resources, `scribe` archives, `core` bundles
+  and patches, and update manifests, so netstar-labs can sign at the source and
+  verify at every consumer (the supply-chain-integrity loop).
+- **Authenticity + expiration.** Because verification checks the signer chain and
+  its validity window, signed artifacts can carry an expiry — the basis for
+  expiring data and software. (See the local signing/expiration plan.)
+- **DNSSEC trust-anchor bootstrap** (the motivating example): authenticate
+  `root-anchors.xml` against `root-anchors.p7s` and the ICANN root, closing the
+  RFC 5011 authenticated-bootstrap gap for a DNSSEC-validating consumer.
 
 ## Design commitments
 
@@ -43,6 +51,6 @@ consumer, `cms` is the single netstar-labs-owned, audited implementation that
 ## Status
 
 Verification and signing are implemented and tested end to end (RSA and ECDSA,
-SHA-256/384/512, tamper / wrong-root / expiry negatives). The intended consumer
-integration is `aegis`'s root-anchor loader. See the
+SHA-256/384/512, tamper / wrong-root / expiry negatives), and smoke-tested against
+OpenSSL-produced signatures for interoperability. See the
 [architecture](architecture.md) for the CMS subset and flow.

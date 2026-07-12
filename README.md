@@ -3,11 +3,15 @@
 `cms` verifies and produces **detached CMS SignedData** signatures (RFC 5652)
 using only the Go standard library — no CGo, no third-party crypto. It is a
 deliberately small, auditable subset: detached SignedData over externally
-supplied content, with signed attributes. That is exactly what is needed to
-verify vendor-signed artifacts across netstar-labs — IANA's
-`root-anchors.xml`/`.p7s` (the RFC 5011 / RFC 9718 trust-anchor bootstrap that
-`aegis` needs), signed feed/RPZ bundles, `refs` resources — and to produce the
-same for netstar-labs's own signed data.
+supplied content, with signed attributes.
+
+That is exactly what is needed to verify vendor-signed artifacts and to produce
+netstar-labs's own — signed feed/RPZ bundles, `refs` resources, `scribe`
+archives, `core` bundles and patches, and update manifests. The canonical
+example is authenticating IANA's `root-anchors.xml` against its detached
+`.p7s` signature (the RFC 5011 / RFC 9718 DNSSEC trust-anchor bootstrap): a
+common data-signing shape that the Go standard library could not otherwise
+verify.
 
 ```
 content ─┐
@@ -81,8 +85,9 @@ Verified so far:
 - **OpenSSL/LibreSSL RSA** detached signatures, SHA-256 and SHA-384 → accepted;
   tampered content and an untrusting root pool → rejected.
 - **Self round-trip** RSA and ECDSA (P-256), SHA-256/384/512 → accepted.
-- **Downstream**: `aegis` signs and re-parses a real KSK-2017 `root-anchors.xml`
-  through `Verify`, matching the built-in trust-anchor digest.
+- **End to end**: signing and re-parsing a real KSK-2017 `root-anchors.xml`
+  through `Verify` yields the published trust-anchor digest (the DNSSEC bootstrap
+  use case, exercised by a consumer).
 
 (OpenSSL *ECDSA* signing was not exercised here only because the local LibreSSL
 `req`/`ecparam` CLI hung when generating the EC test cert — an environment quirk,
