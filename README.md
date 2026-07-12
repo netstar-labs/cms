@@ -61,6 +61,27 @@ RFC 5652 (CMS), RFC 5758 (SHA-2 signature algorithms), RFC 3370 (CMS algorithms)
 RFC 5280 (X.509 path validation, via `crypto/x509`). Consumers: RFC 9718 / RFC
 5011 (IANA root-anchors.xml distribution and trust-anchor updates).
 
+## Testing & interoperability
+
+Beyond the unit tests (`go test ./...` — self round-trip Sign→Verify for RSA and
+ECDSA, plus tamper / wrong-root / expiry / garbage negatives), the verifier is
+**smoke-tested against a reference implementation**: detached CMS SignedData
+produced by OpenSSL/LibreSSL (`openssl cms -sign -binary … -outform DER`) is
+verified by this package, confirming spec interoperability rather than only
+self-consistency.
+
+Verified so far:
+
+- **OpenSSL/LibreSSL RSA** detached signatures, SHA-256 and SHA-384 → accepted;
+  tampered content and an untrusting root pool → rejected.
+- **Self round-trip** RSA and ECDSA (P-256), SHA-256/384/512 → accepted.
+- **Downstream**: `aegis` signs and re-parses a real KSK-2017 `root-anchors.xml`
+  through `Verify`, matching the built-in trust-anchor digest.
+
+(OpenSSL *ECDSA* signing was not exercised here only because the local LibreSSL
+`req`/`ecparam` CLI hung when generating the EC test cert — an environment quirk,
+not a `cms` limitation; ECDSA verification is covered by the self round-trip.)
+
 ## Security notes
 
 - Bootstrap trust still originates out-of-band: the root pool passed to `Verify`

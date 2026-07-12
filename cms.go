@@ -118,7 +118,7 @@ func Verify(content, sig []byte, roots *x509.CertPool, now time.Time) ([]*x509.C
 	var verified []*x509.Certificate
 	var lastErr error = ErrVerify
 	for _, si := range sd.SignerInfos {
-		cert, err := verifySigner(si, content, certs, roots, now)
+		cert, err := verifySigner(si, content, sd.EncapContentInfo.EContentType, certs, roots, now)
 		if err != nil {
 			lastErr = err
 			continue
@@ -131,7 +131,7 @@ func Verify(content, sig []byte, roots *x509.CertPool, now time.Time) ([]*x509.C
 	return verified, nil
 }
 
-func verifySigner(si signerInfo, content []byte, certs []*x509.Certificate, roots *x509.CertPool, now time.Time) (*x509.Certificate, error) {
+func verifySigner(si signerInfo, content []byte, eContentType asn1.ObjectIdentifier, certs []*x509.Certificate, roots *x509.CertPool, now time.Time) (*x509.Certificate, error) {
 	cert := findCert(certs, si.SID)
 	if cert == nil {
 		return nil, errors.New("cms: signer certificate not found")
@@ -143,16 +143,20 @@ func verifySigner(si signerInfo, content []byte, certs []*x509.Certificate, root
 
 	// Determine the bytes actually signed. With signed attributes present (the
 	// normal case, and what IANA uses), the signature is over the DER of the
-	// SET OF attributes, and the messageDigest attribute must equal the digest
-	// of the external content.
+	// SET OF attributes; the messageDigest attribute must equal the digest of
+	// the external content, and the contentType attribute must equal the
+	// encapsulated content type (RFC 5652 §5.4).
 	var signed []byte
 	if len(si.SignedAttrs.FullBytes) > 0 {
-		md, err := signedAttrMessageDigest(si.SignedAttrs)
+		md, ct, err := parseSignedAttrs(si.SignedAttrs)
 		if err != nil {
 			return nil, err
 		}
 		if !bytesEqual(md, digest(h, content)) {
 			return nil, errors.New("cms: messageDigest attribute mismatch")
+		}
+		if !ct.Equal(eContentType) {
+			return nil, errors.New("cms: contentType attribute mismatch")
 		}
 		signed = reencodeAsSet(si.SignedAttrs.FullBytes)
 	} else {
@@ -186,35 +190,34 @@ func verifySignature(cert *x509.Certificate, h crypto.Hash, dgst, sig []byte) er
 	}
 }
 
-func signedAttrMessageDigest(attrs asn1.RawValue) ([]byte, error) {
+// parseSignedAttrs returns the messageDigest value and the contentType OID from
+// the SET OF signed attributes; both are mandatory (RFC 5652 §5.3).
+func parseSignedAttrs(attrs asn1.RawValue) (messageDigest []byte, contentType asn1.ObjectIdentifier, err error) {
 	rest := attrs.Bytes
-	var found []byte
-	var haveContentType bool
 	for len(rest) > 0 {
 		var a attribute
-		var err error
 		rest, err = asn1.Unmarshal(rest, &a)
 		if err != nil {
-			return nil, fmt.Errorf("cms: parse signed attribute: %w", err)
+			return nil, nil, fmt.Errorf("cms: parse signed attribute: %w", err)
 		}
 		switch {
 		case a.Type.Equal(oidMessageDigest):
-			var octets []byte
-			if _, err := asn1.Unmarshal(a.Values.Bytes, &octets); err != nil {
-				return nil, fmt.Errorf("cms: messageDigest value: %w", err)
+			if _, err := asn1.Unmarshal(a.Values.Bytes, &messageDigest); err != nil {
+				return nil, nil, fmt.Errorf("cms: messageDigest value: %w", err)
 			}
-			found = octets
 		case a.Type.Equal(oidContentType):
-			haveContentType = true
+			if _, err := asn1.Unmarshal(a.Values.Bytes, &contentType); err != nil {
+				return nil, nil, fmt.Errorf("cms: contentType value: %w", err)
+			}
 		}
 	}
-	if found == nil {
-		return nil, errors.New("cms: messageDigest attribute absent")
+	if messageDigest == nil {
+		return nil, nil, errors.New("cms: messageDigest attribute absent")
 	}
-	if !haveContentType {
-		return nil, errors.New("cms: contentType attribute absent")
+	if contentType == nil {
+		return nil, nil, errors.New("cms: contentType attribute absent")
 	}
-	return found, nil
+	return messageDigest, contentType, nil
 }
 
 // reencodeAsSet returns the DER of a SET OF from an implicit [0] tagged value by
