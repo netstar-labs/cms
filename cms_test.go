@@ -109,3 +109,65 @@ func mustRSA(t *testing.T) *rsa.PrivateKey {
 	}
 	return k
 }
+
+// TestVerifyWithIntermediateChain builds root CA → intermediate CA → leaf signer
+// and confirms VerifyWith chains through the bundle's intermediate to a root pool
+// that trusts only the root.
+func TestVerifyWithIntermediateChain(t *testing.T) {
+	now := time.Now()
+	mkCert := func(cn string, serial int64, pub any, parent *x509.Certificate, parentKey crypto.Signer, isCA bool) *x509.Certificate {
+		tmpl := &x509.Certificate{
+			SerialNumber:          big.NewInt(serial),
+			Subject:               pkix.Name{CommonName: cn},
+			NotBefore:             now.Add(-time.Hour),
+			NotAfter:              now.Add(24 * time.Hour),
+			KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+			BasicConstraintsValid: true,
+			IsCA:                  isCA,
+		}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, pub, parentKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, _ := x509.ParseCertificate(der)
+		return c
+	}
+
+	rootKey := mustRSA(t)
+	rootTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "root"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
+		KeyUsage: x509.KeyUsageCertSign, BasicConstraintsValid: true, IsCA: true,
+	}
+	rootDER, _ := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	root, _ := x509.ParseCertificate(rootDER)
+
+	interKey := mustRSA(t)
+	inter := mkCert("intermediate", 2, &interKey.PublicKey, root, rootKey, true)
+
+	leafKey := mustRSA(t)
+	leaf := mkCert("leaf signer", 3, &leafKey.PublicKey, inter, interKey, false)
+
+	content := []byte("chain test")
+	sig, err := Sign(content, leaf, leafKey, SignOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The SignedData embeds only the leaf; add the intermediate via opts.
+	inters := x509.NewCertPool()
+	inters.AddCert(inter)
+	roots := x509.NewCertPool()
+	roots.AddCert(root)
+
+	if _, err := VerifyWith(content, sig, x509.VerifyOptions{
+		Roots: roots, Intermediates: inters, CurrentTime: now,
+	}); err != nil {
+		t.Fatalf("intermediate chain should verify: %v", err)
+	}
+	// Without the intermediate and without it in the bundle, the chain breaks.
+	if _, err := VerifyWith(content, sig, x509.VerifyOptions{
+		Roots: roots, Intermediates: x509.NewCertPool(), CurrentTime: now,
+	}); err == nil {
+		t.Fatal("chain verified without the intermediate")
+	}
+}

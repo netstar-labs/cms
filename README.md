@@ -88,7 +88,41 @@ not a `cms` limitation; ECDSA verification is covered by the self round-trip.)
   must arrive through a trusted channel (shipped with the binary or the OS store).
   CMS moves the trust root; it does not remove it.
 - Signed attributes are required for the verified path: `messageDigest` is checked
-  against `H(content)` and the signature is verified over the DER `SET OF`
-  attributes (RFC 5652 §5.4), not over the content directly.
-- No revocation checking is performed here; supply it via `x509.VerifyOptions` if
-  your threat model needs it.
+  against `H(content)`, the `contentType` attribute must match the encapsulated
+  content type, and the signature is verified over the DER `SET OF` attributes
+  (RFC 5652 §5.4), not over the content directly.
+
+### Revocation
+
+`Verify` does **not** check certificate revocation — and note that Go's
+`x509.VerifyOptions` has no revocation facility either (it governs roots,
+intermediates, key usages, and the validity clock, not CRL/OCSP). Revocation is
+therefore a step the caller performs **on the returned signer certificate**: use
+`VerifyWith` to control the chain build, then reject the result if the signer is
+revoked. See [example/revoke](example/revoke/) for a runnable end-to-end demo.
+
+```go
+signers, err := cms.VerifyWith(content, sig, x509.VerifyOptions{
+    Roots:       roots,
+    CurrentTime: now,
+    // KeyUsages / Intermediates as your policy requires; the bundle's own
+    // certificates are added as intermediates automatically.
+})
+if err != nil { /* not authentic */ }
+
+// Revocation is a separate, caller-owned check on the verified signer.
+crl, _ := x509.ParseRevocationList(crlDER)
+if crl.CheckSignatureFrom(caCert) == nil { // trust the CRL first
+    for _, s := range signers {
+        for _, e := range crl.RevokedCertificateEntries {
+            if e.SerialNumber.Cmp(s.SerialNumber) == 0 {
+                // signer revoked — reject
+            }
+        }
+    }
+}
+```
+
+(For OCSP instead of CRLs, query the responder for the returned signer certificate
+and reject on a `Revoked` status; OCSP lives in `golang.org/x/crypto/ocsp`, so
+adopt it only if you accept that `x/` dependency.)

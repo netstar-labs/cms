@@ -95,7 +95,25 @@ type attribute struct {
 // content: at least one signer must have a valid signature over the content, a
 // certificate chaining to roots, and validity at now. It returns the verified
 // signer certificates.
+//
+// Verify does not check certificate revocation (Go's x509.VerifyOptions has no
+// revocation facility). For a revocation policy, use VerifyWith to control the
+// chain build and then check the returned signer certificate against a CRL or
+// OCSP responder — see the security notes and example/revoke.
 func Verify(content, sig []byte, roots *x509.CertPool, now time.Time) ([]*x509.Certificate, error) {
+	return VerifyWith(content, sig, x509.VerifyOptions{
+		Roots:       roots,
+		CurrentTime: now,
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	})
+}
+
+// VerifyWith is Verify with caller-controlled chain verification. The signer
+// certificate is validated with opts (Roots, CurrentTime, KeyUsages,
+// Intermediates, …); any certificates carried in the SignedData are added as
+// intermediates when opts.Intermediates is nil, so leaf→intermediate→root chains
+// verify. Revocation remains a caller responsibility on the returned certs.
+func VerifyWith(content, sig []byte, opts x509.VerifyOptions) ([]*x509.Certificate, error) {
 	var ci contentInfo
 	if _, err := asn1.Unmarshal(sig, &ci); err != nil {
 		return nil, fmt.Errorf("cms: parse ContentInfo: %w", err)
@@ -115,10 +133,24 @@ func Verify(content, sig []byte, roots *x509.CertPool, now time.Time) ([]*x509.C
 		return nil, err
 	}
 
+	// Use the bundle's certificates as intermediates unless the caller supplied
+	// their own, and default KeyUsages to Any (CMS signer certs rarely carry the
+	// ServerAuth EKU that x509 assumes by default).
+	if opts.Intermediates == nil && len(certs) > 0 {
+		inter := x509.NewCertPool()
+		for _, c := range certs {
+			inter.AddCert(c)
+		}
+		opts.Intermediates = inter
+	}
+	if len(opts.KeyUsages) == 0 {
+		opts.KeyUsages = []x509.ExtKeyUsage{x509.ExtKeyUsageAny}
+	}
+
 	var verified []*x509.Certificate
 	var lastErr error = ErrVerify
 	for _, si := range sd.SignerInfos {
-		cert, err := verifySigner(si, content, sd.EncapContentInfo.EContentType, certs, roots, now)
+		cert, err := verifySigner(si, content, sd.EncapContentInfo.EContentType, certs, opts)
 		if err != nil {
 			lastErr = err
 			continue
@@ -131,7 +163,7 @@ func Verify(content, sig []byte, roots *x509.CertPool, now time.Time) ([]*x509.C
 	return verified, nil
 }
 
-func verifySigner(si signerInfo, content []byte, eContentType asn1.ObjectIdentifier, certs []*x509.Certificate, roots *x509.CertPool, now time.Time) (*x509.Certificate, error) {
+func verifySigner(si signerInfo, content []byte, eContentType asn1.ObjectIdentifier, certs []*x509.Certificate, opts x509.VerifyOptions) (*x509.Certificate, error) {
 	cert := findCert(certs, si.SID)
 	if cert == nil {
 		return nil, errors.New("cms: signer certificate not found")
@@ -166,11 +198,7 @@ func verifySigner(si signerInfo, content []byte, eContentType asn1.ObjectIdentif
 	if err := verifySignature(cert, h, digest(h, signed), si.Signature); err != nil {
 		return nil, err
 	}
-	if _, err := cert.Verify(x509.VerifyOptions{
-		Roots:       roots,
-		CurrentTime: now,
-		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-	}); err != nil {
+	if _, err := cert.Verify(opts); err != nil {
 		return nil, fmt.Errorf("cms: chain: %w", err)
 	}
 	return cert, nil
