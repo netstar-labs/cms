@@ -32,7 +32,9 @@ impossible with the standard library alone — the concrete gap this package fil
   verify at every consumer (the supply-chain-integrity loop).
 - **Authenticity + expiration.** Because verification checks the signer chain and
   its validity window, signed artifacts can carry an expiry — the basis for
-  expiring data and software. (See the local signing/expiration plan.)
+  expiring data and software. For write-once resources that must outlive a short
+  signing leaf, `VerifyAsSigned` anchors validity to the signed `signingTime`, so
+  an authentic artifact stays verifiable after the leaf expires.
 - **DNSSEC trust-anchor bootstrap** (the motivating example): authenticate
   `root-anchors.xml` against `root-anchors.p7s` and the ICANN root, closing the
   RFC 5011 authenticated-bootstrap gap for a DNSSEC-validating consumer.

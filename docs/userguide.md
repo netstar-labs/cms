@@ -29,6 +29,30 @@ if err != nil {
 - whose `messageDigest` signed attribute equals `H(content)`,
 - and whose certificate chains to `roots` and is valid at the supplied time.
 
+## Verify a write-once resource (as signed)
+
+For a resource written once and pulled long after signing — possibly after a short
+signing leaf has expired — verify **as of the signing instant** rather than now:
+
+```go
+signers, err := cms.VerifyAsSigned(content, sig, roots)
+```
+
+`VerifyAsSigned` anchors certificate-chain validity to the signed `signingTime`
+attribute (or, when absent, the signer certificate's `NotBefore`) instead of the
+wall clock. A detached signature over immutable bytes is a timeless fact, so an
+otherwise-valid resource does not become unverifiable merely because its leaf has
+since expired. Digest, chain, and signature checks are otherwise identical to
+`Verify`; use plain `Verify(…, now)` when you *want* expiry to bite (fresh-pull
+resources). Read the signed time with:
+
+```go
+t, ok, err := cms.SigningTime(sig) // ok=false when the attribute is absent
+```
+
+The value is trustworthy only after `Verify`/`VerifyAsSigned` succeeds over the
+same signature.
+
 ## Produce a detached signature
 
 ```go

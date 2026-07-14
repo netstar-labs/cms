@@ -51,6 +51,15 @@ signer chain so `Verify` can validate it against the caller's roots.
 4. Succeed if any signer verifies; return the verified certificates. Revocation
    is a caller step on the returned certificate (see the trade-off table).
 
+`VerifyAsSigned` is the same flow with the chain clock set to the signed
+`signingTime` (or the signer's `NotBefore` when absent) instead of the wall clock,
+so a write-once resource stays verifiable after a short signing leaf expires — the
+signature over immutable bytes is a timeless fact. It parses the first signer's
+signed attributes up front to read that time; `SigningTime` exposes the same value
+(trustworthy only once verification succeeds). Because `signingTime` is a signed
+attribute, a forged or backdated value cannot pass — the signature over the
+attributes fails, or the certificate genuinely was valid at the claimed instant.
+
 ## Sign flow
 
 `Sign` is the strict inverse: build the signed attributes (`contentType=id-data`,

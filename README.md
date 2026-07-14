@@ -18,7 +18,9 @@ content ─┐
          ├─▶  Verify(content, sig, roots, now) ─▶  []*x509.Certificate (verified signers)
 sig ─────┘        │ parse ContentInfo→SignedData · resolve signer cert · check
                   │ messageDigest == H(content) · verify sig over signed attrs · chain to roots
-Sign(content, cert, key, opts) ─▶ detached SignedData DER
+         └─▶  VerifyAsSigned(content, sig, roots) ─▶ same, anchored to the signed signingTime
+                  │ (write-once resources stay verifiable after a short leaf expires)
+Sign(content, cert, key, opts) ─▶ detached SignedData DER  (opts.SigningTime binds the instant)
 ```
 
 ## Documentation
@@ -52,21 +54,33 @@ func VerifyWith(content, sig []byte, opts x509.VerifyOptions) ([]*x509.Certifica
 // Sign produces a detached CMS SignedData over content, signed by cert/key with
 // signed attributes (contentType, messageDigest, optional signingTime).
 func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOptions) ([]byte, error)
+
+// VerifyAsSigned is Verify anchored to the signed signingTime (or the signer's
+// NotBefore when absent) instead of the wall clock, so a write-once resource stays
+// verifiable after a short signing leaf has expired. Digest/chain/signature checks
+// are otherwise identical to Verify.
+func VerifyAsSigned(content, sig []byte, roots *x509.CertPool) ([]*x509.Certificate, error)
+
+// SigningTime returns the signed signingTime attribute (ok=false if absent). The
+// value is trustworthy only once Verify/VerifyAsSigned has succeeded over the sig.
+func SigningTime(sig []byte) (t time.Time, ok bool, err error)
 ```
 
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| `cms.go` | The library: `Verify`, `VerifyWith`, `Sign`, the RFC 5652 ASN.1 shapes, OIDs, DER helpers |
+| `cms.go` | The library: `Verify`, `VerifyWith`, `VerifyAsSigned`, `SigningTime`, `Sign`, the RFC 5652 ASN.1 shapes, OIDs, DER helpers |
 | `cms_test.go` | Self-signed Sign→Verify round-trips (RSA + ECDSA), tamper / wrong-root / expiry negatives |
+| `verifyassigned_test.go` | `VerifyAsSigned` over an expired-since leaf; `NotBefore` fallback; `SigningTime` round-trip |
 
 ## Scope
 
 **In:** detached SignedData verification and signing; signed attributes
-(`contentType`, `messageDigest`, `signingTime`); RSA (PKCS#1 v1.5) and ECDSA
-signatures; SHA-256/384/512; issuer-and-serial and subject-key-identifier signer
-resolution; X.509 chain verification to a caller-supplied root pool.
+(`contentType`, `messageDigest`, `signingTime`); verify-as-signed (anchor chain
+validity to the signing instant for write-once resources); RSA (PKCS#1 v1.5) and
+ECDSA signatures; SHA-256/384/512; issuer-and-serial and subject-key-identifier
+signer resolution; X.509 chain verification to a caller-supplied root pool.
 
 **Out (by design):** encryption, enveloped / authenticated-enveloped data,
 timestamping tokens, attribute certificates, CRL/OCSP revocation checking (the
