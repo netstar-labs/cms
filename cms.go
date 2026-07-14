@@ -168,6 +168,110 @@ func VerifyWith(content, sig []byte, opts x509.VerifyOptions) ([]*x509.Certifica
 	return verified, nil
 }
 
+// SigningTime returns the signed signingTime attribute of sig's first signer, or
+// ok=false when the signature carries none. It parses without verifying, so the
+// value is trustworthy only once Verify/VerifyWith/VerifyAsSigned has succeeded
+// over the same signature and content.
+func SigningTime(sig []byte) (t time.Time, ok bool, err error) {
+	_, si, err := parseFirstSigner(sig)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if len(si.SignedAttrs.FullBytes) == 0 {
+		return time.Time{}, false, nil
+	}
+	return signingTimeFromAttrs(si.SignedAttrs)
+}
+
+// VerifyAsSigned verifies sig over content but anchors certificate-chain validity
+// to the signed signingTime — or, when no signingTime is present, to the signer
+// certificate's NotBefore — instead of the current wall clock. Digest match,
+// chain to roots, and signature checks are otherwise identical to Verify.
+//
+// Use it for write-once resources whose signer certificate may have expired since
+// signing: a detached signature over immutable bytes is a timeless fact, so an
+// otherwise-valid resource must not become unverifiable merely because a short
+// signing leaf has since expired. The signingTime is itself a signed attribute,
+// so a forged or backdated value cannot pass — either the signature over the
+// attributes fails, or the certificate genuinely was valid at the claimed time.
+// It does NOT check revocation (see VerifyWith); pair it with a revocation or
+// known-good-floor policy if a compromised-then-expired leaf is in scope.
+func VerifyAsSigned(content, sig []byte, roots *x509.CertPool) ([]*x509.Certificate, error) {
+	sd, si, err := parseFirstSigner(sig)
+	if err != nil {
+		return nil, err
+	}
+
+	var anchor time.Time
+	var have bool
+	if len(si.SignedAttrs.FullBytes) > 0 {
+		if anchor, have, err = signingTimeFromAttrs(si.SignedAttrs); err != nil {
+			return nil, err
+		}
+	}
+	if !have {
+		// No signingTime: fall back to the signer's NotBefore (parse-only, since
+		// the chain is not yet verified) so the anchor still sits inside the leaf's
+		// validity window.
+		certs, err := parseCertificates(sd.Certificates.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		cert := findCert(certs, si.SID)
+		if cert == nil {
+			return nil, errors.New("cms: signer certificate not found")
+		}
+		anchor = cert.NotBefore
+	}
+
+	return VerifyWith(content, sig, x509.VerifyOptions{
+		Roots:       roots,
+		CurrentTime: anchor,
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	})
+}
+
+// parseFirstSigner decodes a detached CMS SignedData and returns it with its
+// first SignerInfo — the shared front half of the signingTime helpers.
+func parseFirstSigner(sig []byte) (signedData, signerInfo, error) {
+	var ci contentInfo
+	if _, err := asn1.Unmarshal(sig, &ci); err != nil {
+		return signedData{}, signerInfo{}, fmt.Errorf("cms: parse ContentInfo: %w", err)
+	}
+	if !ci.ContentType.Equal(oidSignedData) {
+		return signedData{}, signerInfo{}, ErrNotSignedData
+	}
+	var sd signedData
+	if _, err := asn1.Unmarshal(ci.Content.Bytes, &sd); err != nil {
+		return signedData{}, signerInfo{}, fmt.Errorf("cms: parse SignedData: %w", err)
+	}
+	if len(sd.SignerInfos) == 0 {
+		return signedData{}, signerInfo{}, ErrNoSigners
+	}
+	return sd, sd.SignerInfos[0], nil
+}
+
+// signingTimeFromAttrs extracts the signingTime value from a SET OF signed
+// attributes, returning ok=false when the attribute is absent.
+func signingTimeFromAttrs(attrs asn1.RawValue) (time.Time, bool, error) {
+	rest := attrs.Bytes
+	for len(rest) > 0 {
+		var a attribute
+		var err error
+		if rest, err = asn1.Unmarshal(rest, &a); err != nil {
+			return time.Time{}, false, fmt.Errorf("cms: parse signed attribute: %w", err)
+		}
+		if a.Type.Equal(oidSigningTime) {
+			var t time.Time
+			if _, err := asn1.Unmarshal(a.Values.Bytes, &t); err != nil {
+				return time.Time{}, false, fmt.Errorf("cms: signingTime value: %w", err)
+			}
+			return t.UTC(), true, nil
+		}
+	}
+	return time.Time{}, false, nil
+}
+
 func verifySigner(si signerInfo, content []byte, eContentType asn1.ObjectIdentifier, certs []*x509.Certificate, opts x509.VerifyOptions) (*x509.Certificate, error) {
 	cert := findCert(certs, si.SID)
 	if cert == nil {
