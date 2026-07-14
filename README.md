@@ -21,11 +21,20 @@ sig ─────┘        │ parse ContentInfo→SignedData · resolve sign
 Sign(content, cert, key, opts) ─▶ detached SignedData DER
 ```
 
-- **Documentation**
-  - [Executive summary](docs/executive-summary.md) — what it is and why
-  - [Architecture](docs/architecture.md) — the CMS subset, verify/sign flow, trade-offs
-  - [User guide](docs/userguide.md) — API, formats, operational notes
-  - [Examples](example/README.md) — verify a detached signature
+## Documentation
+
+**Start here**
+- [Introduction](docs/introduction.md) — what `cms` is, in one page
+- [Executive summary](docs/executive-summary.md) — what it is and why, leadership-readable
+
+**Deep dive**
+- [Architecture](docs/architecture.md) — the CMS subset, verify/sign flow, trade-offs
+
+**Operations**
+- [User guide](docs/userguide.md) — API, wire/file formats, day-2 operations
+
+**Examples**
+- [example/README](example/README.md) — verify a detached signature, then enforce revocation
 
 ## API
 
@@ -49,9 +58,8 @@ func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOp
 
 | Path | Purpose |
 |---|---|
-| `cms.go` | The library: `Verify`, `Sign`, the RFC 5652 ASN.1 shapes, OIDs, DER helpers |
+| `cms.go` | The library: `Verify`, `VerifyWith`, `Sign`, the RFC 5652 ASN.1 shapes, OIDs, DER helpers |
 | `cms_test.go` | Self-signed Sign→Verify round-trips (RSA + ECDSA), tamper / wrong-root / expiry negatives |
-| `example/verify/` | Verify a detached signature over a file against a PEM root bundle |
 
 ## Scope
 
