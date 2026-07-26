@@ -162,5 +162,4 @@ adopt it only if you accept that `x/` dependency.)
 
 ## License
 
-Copyright (C) 2026 zxdev. Licensed under the GNU General Public License v3.0 or
-later — see [LICENSE](LICENSE).
+Licensed under the Apache License, Version 2.0 — see [LICENSE](LICENSE).
