@@ -42,7 +42,9 @@ signer chain so `Verify` can validate it against the caller's roots.
    3. **Verify the signature over the signed attributes.** The attributes are
       stored `[0] IMPLICIT` but signed as a universal `SET OF`; the tag byte is
       swapped from `0xA0` to `0x31` (IMPLICIT tagging replaces only the tag, so
-      the length and contents are unchanged) and that DER is hashed and verified.
+      the length and contents are unchanged). RSA and ECDSA verify a digest of that
+      DER; Ed25519 verifies the DER itself (PureEdDSA, RFC 8419) and requires the
+      signer's digest algorithm to be SHA-512.
    4. **Verify the chain** with the caller's `x509.VerifyOptions`
       (`x509.Certificate.Verify`). `Verify` supplies the roots and clock;
       `VerifyWith` lets the caller control roots, intermediates, key usages, and
@@ -64,7 +66,8 @@ attributes fails, or the certificate genuinely was valid at the claimed instant.
 
 `Sign` is the strict inverse: build the signed attributes (`contentType=id-data`,
 `messageDigest=H(content)`, optional `signingTime`), encode them as a sorted DER
-`SET OF`, sign `H(SET OF attrs)` with the caller's `crypto.Signer`, and assemble
+`SET OF`, sign `H(SET OF attrs)` with the caller's `crypto.Signer` (an Ed25519 key
+signs the `SET OF` itself, with SHA-512 as the digest algorithm), and assemble
 `SignerInfo → SignedData → ContentInfo` with the signer certificate embedded and
 `eContent` omitted (detached).
 
@@ -75,13 +78,14 @@ attributes fails, or the certificate genuinely was valid at the claimed instant.
 | Signed-attrs re-encoding | Swap `0xA0`→`0x31` on the captured bytes | The exact bytes the signer hashed; avoids re-marshal drift |
 | SET OF ordering (Sign) | Sort attribute encodings before concatenating | DER `SET OF` requires sorted elements (interop) |
 | Signature algorithm | Chosen from the signer's public-key type; digest from `digestAlgorithm` | Matches how CMS separates digest and signature algorithms |
+| Ed25519 digest | SHA-512 only, in `Sign` and `Verify` | RFC 8419 §3.1 fixes it; accepting another would let a weaker `messageDigest` stand behind an Ed25519 signature |
 | Revocation | Not checked; a caller step on the returned signer cert (CRL/OCSP) | Go's `x509.VerifyOptions` has no revocation facility, and revocation policy is caller territory — keeps the package focused (see README §Revocation, `example/revoke`) |
 | Content in memory | `[]byte` content and signature | Root-anchors and manifests are small; streaming is unneeded |
 
 ## Why standard-library-only is feasible here
 
 The CMS text format is ASN.1 DER, which `encoding/asn1` handles; chain validation
-is `crypto/x509`; the signature primitives are `crypto/rsa` and `crypto/ecdsa`.
+is `crypto/x509`; the signature primitives are `crypto/rsa`, `crypto/ecdsa` and `crypto/ed25519`.
 The only thing missing from stdlib was the *glue* — parsing SignedData and
 reconstructing the signed-attributes bytes — which is a few hundred lines. That
 is exactly the gap this package fills without a dependency.

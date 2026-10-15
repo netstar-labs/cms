@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -39,6 +40,7 @@ var (
 
 	oidRSAEncryption = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
 	oidECPublicKey   = asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 1}
+	oidEd25519       = asn1.ObjectIdentifier{1, 3, 101, 112} // RFC 8410; its CMS use is RFC 8419
 )
 
 var (
@@ -301,7 +303,7 @@ func verifySigner(si signerInfo, content []byte, eContentType asn1.ObjectIdentif
 		signed = content
 	}
 
-	if err := verifySignature(cert, h, digest(h, signed), si.Signature); err != nil {
+	if err := verifySignature(cert, h, signed, si.Signature); err != nil {
 		return nil, err
 	}
 	if _, err := cert.Verify(opts); err != nil {
@@ -310,12 +312,22 @@ func verifySigner(si signerInfo, content []byte, eContentType asn1.ObjectIdentif
 	return cert, nil
 }
 
-func verifySignature(cert *x509.Certificate, h crypto.Hash, dgst, sig []byte) error {
+// verifySignature checks sig over the signed bytes. RSA and ECDSA sign a digest of them; Ed25519 signs the
+// bytes themselves (PureEdDSA), and RFC 8419 §3.1 requires its digest algorithm to be SHA-512.
+func verifySignature(cert *x509.Certificate, h crypto.Hash, signed, sig []byte) error {
 	switch pub := cert.PublicKey.(type) {
 	case *rsa.PublicKey:
-		return rsa.VerifyPKCS1v15(pub, h, dgst, sig)
+		return rsa.VerifyPKCS1v15(pub, h, digest(h, signed), sig)
 	case *ecdsa.PublicKey:
-		if !ecdsa.VerifyASN1(pub, dgst, sig) {
+		if !ecdsa.VerifyASN1(pub, digest(h, signed), sig) {
+			return ErrVerify
+		}
+		return nil
+	case ed25519.PublicKey:
+		if h != crypto.SHA512 {
+			return fmt.Errorf("cms: Ed25519 signer with digest algorithm %v, RFC 8419 requires SHA-512", h)
+		}
+		if !ed25519.Verify(pub, signed, sig) {
 			return ErrVerify
 		}
 		return nil
@@ -429,16 +441,24 @@ func digest(h crypto.Hash, b []byte) []byte {
 
 // SignOptions configures Sign.
 type SignOptions struct {
-	Hash        crypto.Hash // default SHA-256
+	Hash        crypto.Hash // default SHA-256; SHA-512 for an Ed25519 key, which accepts no other (RFC 8419)
 	SigningTime time.Time   // default: omitted
 }
 
 // Sign produces a detached CMS SignedData over content, signed by cert/key with
 // signed attributes (contentType=id-data, messageDigest, optional signingTime).
-// The signer certificate is embedded so Verify can build the chain.
+// The signer certificate is embedded so Verify can build the chain. An Ed25519
+// key signs by RFC 8419: SHA-512 for the messageDigest, PureEdDSA over the
+// signed attributes.
 func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOptions) ([]byte, error) {
+	_, isEd25519 := key.Public().(ed25519.PublicKey)
 	h := opts.Hash
-	if h == 0 {
+	switch {
+	case isEd25519 && h != 0 && h != crypto.SHA512:
+		return nil, fmt.Errorf("cms: Ed25519 signs with SHA-512 only (RFC 8419), not %v", h)
+	case isEd25519:
+		h = crypto.SHA512
+	case h == 0:
 		h = crypto.SHA256
 	}
 	digOID, ok := oidForHash(h)
@@ -458,7 +478,12 @@ func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOp
 	if err != nil {
 		return nil, err
 	}
-	sig, err := key.Sign(rand.Reader, digest(h, signedAttrsDER), h)
+	var sig []byte
+	if isEd25519 {
+		sig, err = key.Sign(rand.Reader, signedAttrsDER, crypto.Hash(0)) // PureEdDSA: the message, not a digest
+	} else {
+		sig, err = key.Sign(rand.Reader, digest(h, signedAttrsDER), h)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("cms: sign: %w", err)
 	}
@@ -535,6 +560,8 @@ func sigOIDForKey(key crypto.Signer) asn1.ObjectIdentifier {
 	switch key.Public().(type) {
 	case *ecdsa.PublicKey:
 		return oidECPublicKey
+	case ed25519.PublicKey:
+		return oidEd25519
 	default:
 		return oidRSAEncryption
 	}
