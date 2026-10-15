@@ -55,8 +55,9 @@ var (
 	//
 	// It is NOT returned for input that could not be parsed as a signature: a parse error,
 	// ErrNotSignedData, ErrNoSigners, a malformed certificate in the (attacker-chosen) bundle, or
-	// VerifyAsSigned failing before verification starts (its first signer's certificate is not
-	// in the bundle, or its signingTime is malformed). Whatever the error, non-nil means the
+	// VerifyAsSigned failing before verification starts (its first SignerInfo or signingTime
+	// attribute is malformed, or, when it has no signingTime, its certificate is not in the
+	// bundle). Whatever the error, non-nil means the
 	// signature is not authentic; use ErrVerify only to tell "verification ran and failed" from
 	// "could not read the signature".
 	ErrVerify = errors.New("cms: signature verification failed")

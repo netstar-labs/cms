@@ -40,7 +40,7 @@ verification; nothing needed optimizing except a per-signer rehash that was a de
 | Area | Finding |
 |---|---|
 | Input boundaries | Parsers reject indefinite and non-minimal lengths; a claimed 4 GiB length fails in 7.5 µs; fuzz and a 2.4M-iteration mutation run found no panic. Trailing bytes and unsigned fields are malleable (D-10). |
-| Error handling | `Sign` panicked on caller input → fixed (F-2). `Verify` returns `ErrVerify`-matchable errors → fixed (F-4). Typed-nil key still panics (D-12). |
+| Error handling | `Sign` panicked on caller input → fixed (F-2). `Verify` verification failures match `ErrVerify`; unreadable input deliberately does not → fixed (F-4). Typed-nil key still panics (D-12). |
 | Concurrency | No mutable package state; the package-level OID slices are read-only; `-race` clean. |
 | Resource limits | Verification cost scales with the number of SignerInfos and distinct signer certificates and is **not** bounded by `len(sig)` (D-2b, D-2c). The content is not copied (7.5 KB/op flat from 1 KiB to 64 MiB). |
 | Integer conversions | `tlvHeader` long-form lengths checked at and above 0x80 (the SHA-512 attribute set crosses it; OpenSSL 3.5.0 accepts it). No attacker-sized conversions found. |

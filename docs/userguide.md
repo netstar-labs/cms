@@ -30,8 +30,10 @@ if err != nil {
 - whose `messageDigest` signed attribute, when present, equals `H(content)`,
 - and whose certificate chains to `roots` and is valid at the supplied time.
 
-When signers were present and none verified, the error satisfies
-`errors.Is(err, cms.ErrVerify)` and wraps the specific cause. Pass a non-nil `roots` pool: a
+When the signature parsed, carried signers and none verified, the error satisfies
+`errors.Is(err, cms.ErrVerify)` and wraps the specific cause. Unreadable input (a parse error,
+`ErrNotSignedData`, `ErrNoSigners`, a malformed certificate in the bundle) does not match it;
+any non-nil error still means the signature is not authentic. Pass a non-nil `roots` pool: a
 nil one means the operating system's trust store.
 
 ## Verify a write-once resource (as signed)
@@ -51,8 +53,11 @@ since expired. Digest, chain, and signature checks are otherwise identical to
 `Verify`; use plain `Verify(…, now)` when you *want* expiry to bite (fresh-pull
 resources). Note what it does not prove: the `signingTime` is asserted by the signer, so
 a holder of an expired or compromised key can mint a new signature claiming a time in the
-certificate's validity window. Use it with single-signer signatures and pair it with a
-revocation or known-good-floor policy. Read the signed time with:
+certificate's validity window. Pair it with a revocation or known-good-floor policy. Do not use it on a signature that an untrusted party could have
+altered: the anchor is the *first* SignerInfo's signingTime, read before any signer is verified,
+so a keyless attacker can prepend a junk SignerInfo with a backdated time and make an expired
+signer verify (the result lists only the verified signer). Use `Verify` at the current time
+there; see README Security notes and audit-findings D-3. Read the signed time with:
 
 ```go
 t, ok, err := cms.SigningTime(sig) // ok=false when the attribute is absent
