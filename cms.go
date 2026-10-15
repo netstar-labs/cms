@@ -450,7 +450,21 @@ type SignOptions struct {
 // The signer certificate is embedded so Verify can build the chain. An Ed25519
 // key signs by RFC 8419: SHA-512 for the messageDigest, PureEdDSA over the
 // signed attributes.
+//
+// Sign returns an error, and does not panic, for a nil or unparsed certificate, a nil key, a
+// certificate whose public key is not the key's, or a SigningTime outside years 0 to 9999.
 func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOptions) ([]byte, error) {
+	if cert == nil || len(cert.Raw) == 0 || cert.SerialNumber == nil {
+		return nil, errors.New("cms: Sign needs a parsed certificate")
+	}
+	if key == nil {
+		return nil, errors.New("cms: Sign needs a signing key")
+	}
+	// A certificate that is not the key's would produce a signature that can never verify, and
+	// nothing at signing time would say so.
+	if pub, ok := cert.PublicKey.(interface{ Equal(crypto.PublicKey) bool }); !ok || !pub.Equal(key.Public()) {
+		return nil, errors.New("cms: the certificate's public key is not the signing key's")
+	}
 	_, isEd25519 := key.Public().(ed25519.PublicKey)
 	h := opts.Hash
 	switch {
@@ -471,7 +485,12 @@ func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOp
 		{Type: oidMessageDigest, Values: mustSetOf(mustMarshal(digest(h, content)))},
 	}
 	if !opts.SigningTime.IsZero() {
-		attrs = append(attrs, attribute{Type: oidSigningTime, Values: mustSetOf(mustMarshal(opts.SigningTime.UTC()))})
+		// Not mustMarshal: the time is the caller's, and years outside 0..9999 cannot be encoded.
+		st, err := asn1.Marshal(opts.SigningTime.UTC())
+		if err != nil {
+			return nil, fmt.Errorf("cms: signingTime: %w", err)
+		}
+		attrs = append(attrs, attribute{Type: oidSigningTime, Values: mustSetOf(st)})
 	}
 
 	signedAttrsDER, err := marshalAttributeSet(attrs)
