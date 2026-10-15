@@ -58,7 +58,10 @@ func fixtures(tb testing.TB, now time.Time) []fixture {
 // FuzzVerify feeds arbitrary signature and content bytes to the verifier, which parses
 // attacker-controlled DER. Invariants: it never panics or hangs, and — the security property —
 // a verification can only succeed over the ORIGINAL content: a mutated signature must never
-// authenticate different bytes.
+// authenticate different bytes. One known exception is accepted by design pending the owner's
+// decision (docs/audits/audit-findings.md D-1): strip the signedAttrs and offer the attribute
+// SET itself as the content. A mutating fuzzer will not realistically build that input, so
+// "no forgery found" here is evidence about parsing and gating, not a proof of the property.
 func FuzzVerify(f *testing.F) {
 	now := time.Now()
 	fx := fixtures(f, now)

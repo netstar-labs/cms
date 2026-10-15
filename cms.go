@@ -122,6 +122,11 @@ func Verify(content, sig []byte, roots *x509.CertPool, now time.Time) ([]*x509.C
 // intermediates when opts.Intermediates is nil, so leaf→intermediate→root chains
 // verify. Revocation remains a caller responsibility on the returned certs.
 func VerifyWith(content, sig []byte, opts x509.VerifyOptions) ([]*x509.Certificate, error) {
+	return verifyWith(newVerifyState(content), sig, opts)
+}
+
+// verifyWith is VerifyWith over a caller-supplied state, so tests can observe the work done.
+func verifyWith(st *verifyState, sig []byte, opts x509.VerifyOptions) ([]*x509.Certificate, error) {
 	var ci contentInfo
 	if _, err := asn1.Unmarshal(sig, &ci); err != nil {
 		return nil, fmt.Errorf("cms: parse ContentInfo: %w", err)
@@ -157,7 +162,6 @@ func VerifyWith(content, sig []byte, opts x509.VerifyOptions) ([]*x509.Certifica
 
 	// One verification, however many SignerInfos the (attacker-supplied) signature repeats: the
 	// content is hashed once per digest algorithm and each certificate's chain is built once.
-	st := &verifyState{content: content, digests: map[crypto.Hash][]byte{}, chains: map[*x509.Certificate]error{}}
 	var verified []*x509.Certificate
 	var lastErr error = ErrVerify
 	for _, si := range sd.SignerInfos {
@@ -297,6 +301,14 @@ type verifyState struct {
 	content []byte
 	digests map[crypto.Hash][]byte
 	chains  map[*x509.Certificate]error
+
+	// hashed and chained count the computations actually performed, as opposed to answered from
+	// the caches; the tests assert them, which is how the memoisation is pinned without timing.
+	hashed, chained int
+}
+
+func newVerifyState(content []byte) *verifyState {
+	return &verifyState{content: content, digests: map[crypto.Hash][]byte{}, chains: map[*x509.Certificate]error{}}
 }
 
 func (st *verifyState) digest(h crypto.Hash) []byte {
@@ -304,6 +316,7 @@ func (st *verifyState) digest(h crypto.Hash) []byte {
 	if !ok {
 		d = digest(h, st.content)
 		st.digests[h] = d
+		st.hashed++
 	}
 	return d
 }
@@ -313,6 +326,7 @@ func (st *verifyState) chain(cert *x509.Certificate, opts x509.VerifyOptions) er
 	if !ok {
 		_, err = cert.Verify(opts)
 		st.chains[cert] = err
+		st.chained++
 	}
 	return err
 }
@@ -502,7 +516,10 @@ type SignOptions struct {
 // signed attributes.
 //
 // Sign returns an error, and does not panic, for a nil or unparsed certificate, a nil key, a
-// certificate whose public key is not the key's, or a SigningTime outside years 0 to 9999.
+// certificate whose public key is not the key's, or a SigningTime outside years 0 to 9999. "Is
+// the key's" means cert.PublicKey.Equal(key.Public()): the standard library's keys qualify, but a
+// hand-built Certificate with no PublicKey, or a Signer whose Public returns an RSA or ECDSA key
+// by value rather than by pointer, is refused. A typed-nil key still panics.
 func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOptions) ([]byte, error) {
 	if cert == nil || len(cert.Raw) == 0 || cert.SerialNumber == nil {
 		return nil, errors.New("cms: Sign needs a parsed certificate")

@@ -26,6 +26,12 @@ func TestSignRejectsBadInput(t *testing.T) {
 		"certificate without DER": func() ([]byte, error) {
 			return Sign(content, &x509.Certificate{}, edKey, SignOptions{})
 		},
+		"certificate without a serial number": func() ([]byte, error) {
+			return Sign(content, &x509.Certificate{Raw: edCert.Raw, PublicKey: edCert.PublicKey}, edKey, SignOptions{})
+		},
+		"certificate without a public key": func() ([]byte, error) {
+			return Sign(content, &x509.Certificate{Raw: edCert.Raw, SerialNumber: edCert.SerialNumber}, edKey, SignOptions{})
+		},
 		"rsa certificate, other rsa key": func() ([]byte, error) { return Sign(content, rsaCert, rsaKey2, SignOptions{}) },
 		"rsa certificate, ed25519 key":   func() ([]byte, error) { return Sign(content, rsaCert, edKey, SignOptions{}) },
 		"ed25519 certificate, rsa key":   func() ([]byte, error) { return Sign(content, edCert, rsaKey, SignOptions{}) },
