@@ -15,7 +15,7 @@ import (
 
 // selfSigned returns a self-signed CA certificate and its signer, plus a pool
 // trusting it — enough to exercise detached Sign→Verify end to end.
-func selfSigned(t *testing.T, key crypto.Signer) (*x509.Certificate, *x509.CertPool) {
+func selfSigned(t testing.TB, key crypto.Signer) (*x509.Certificate, *x509.CertPool) {
 	t.Helper()
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(42),
@@ -101,7 +101,7 @@ func TestNotSignedData(t *testing.T) {
 	}
 }
 
-func mustRSA(t *testing.T) *rsa.PrivateKey {
+func mustRSA(t testing.TB) *rsa.PrivateKey {
 	t.Helper()
 	k, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

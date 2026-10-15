@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func mustEd25519(t *testing.T) ed25519.PrivateKey {
+func mustEd25519(t testing.TB) ed25519.PrivateKey {
 	t.Helper()
 	_, k, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
