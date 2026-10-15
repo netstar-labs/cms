@@ -202,11 +202,17 @@ func SigningTime(sig []byte) (t time.Time, ok bool, err error) {
 // Use it for write-once resources whose signer certificate may have expired since
 // signing: a detached signature over immutable bytes is a timeless fact, so an
 // otherwise-valid resource must not become unverifiable merely because a short
-// signing leaf has since expired. The signingTime is itself a signed attribute,
-// so a forged or backdated value cannot pass — either the signature over the
-// attributes fails, or the certificate genuinely was valid at the claimed time.
-// It does NOT check revocation (see VerifyWith); pair it with a revocation or
-// known-good-floor policy if a compromised-then-expired leaf is in scope.
+// signing leaf has since expired. The signingTime is a signed attribute, so it
+// cannot be altered without the signer's key — but it is asserted by the signer,
+// not attested by a time authority: a holder of the key, including an expired or
+// compromised one, can sign new content claiming any time inside the certificate's
+// validity window, or omit signingTime to anchor at NotBefore. VerifyAsSigned
+// proves the signature verifies with a key that was valid at the claimed time, not
+// that signing happened then. The anchor is the FIRST SignerInfo's signingTime, read
+// before any signer is verified, and VerifyWith applies it to every signer; use it
+// with single-signer signatures. It does NOT check revocation (see VerifyWith); pair
+// it with a revocation or known-good-floor policy if a compromised-then-expired leaf
+// is in scope.
 func VerifyAsSigned(content, sig []byte, roots *x509.CertPool) ([]*x509.Certificate, error) {
 	sd, si, err := parseFirstSigner(sig)
 	if err != nil {

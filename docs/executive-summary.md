@@ -54,6 +54,7 @@ impossible with the standard library alone — the concrete gap this package fil
 
 Verification and signing are implemented and tested end to end (RSA, ECDSA and
 Ed25519, SHA-256/384/512, tamper / wrong-root / expiry negatives). An interop test
-checks both directions against `openssl cms`; it passes for RSA and ECDSA on
-LibreSSL, and its Ed25519 case is still to be run on OpenSSL 3. See the
+checks both directions against `openssl cms`; it passes for RSA, ECDSA and Ed25519 on
+OpenSSL 3.5.0, and for RSA and ECDSA on OpenSSL 3.0.15 and LibreSSL 3.3.6 (which cannot do
+Ed25519 CMS, so that case skips there). See the
 [architecture](architecture.md) for the CMS subset and flow.

@@ -33,10 +33,12 @@ signer chain so `Verify` can validate it against the caller's roots.
 
 1. Parse `ContentInfo`; require `contentType == id-signedData`.
 2. Parse `SignedData`; extract the certificate set (`x509.ParseCertificate`).
-3. For each `SignerInfo`:
+3. For each `SignerInfo` (the content is hashed once per digest algorithm, and each
+   certificate's chain is verified once, however many SignerInfos repeat them):
    1. **Resolve the signer certificate** by `IssuerAndSerialNumber` or, for the
       `[0]` form, `SubjectKeyIdentifier`.
-   2. **Check the signed attributes** (RFC 5652 §5.4): the `messageDigest`
+   2. **Check the signed attributes** when present (RFC 5652 §5.4; a SignerInfo with
+      none is accepted and verified directly over the content): the `messageDigest`
       attribute equals `H(content)` with the signer's digest algorithm, and the
       `contentType` attribute value equals the encapsulated content type.
    3. **Verify the signature over the signed attributes.** The attributes are
@@ -58,9 +60,14 @@ signer chain so `Verify` can validate it against the caller's roots.
 so a write-once resource stays verifiable after a short signing leaf expires — the
 signature over immutable bytes is a timeless fact. It parses the first signer's
 signed attributes up front to read that time; `SigningTime` exposes the same value
-(trustworthy only once verification succeeds). Because `signingTime` is a signed
-attribute, a forged or backdated value cannot pass — the signature over the
-attributes fails, or the certificate genuinely was valid at the claimed instant.
+(trustworthy only once verification succeeds). `signingTime` is a signed attribute, so
+it cannot be altered without the signer's key, but it is asserted by the signer rather
+than attested by a time authority: a holder of the key — an expired or compromised one
+included — can sign new content claiming a time inside the certificate's validity window,
+or omit it to anchor at `NotBefore`. `VerifyAsSigned` shows the signature verifies with a
+key that was valid at the claimed time, not that signing happened then. The anchor is the
+first signer's, read before any signer is verified, so use it with single-signer
+signatures; pair it with a revocation or known-good-floor policy.
 
 ## Sign flow
 

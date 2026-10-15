@@ -25,9 +25,14 @@ if err != nil {
 ```
 
 `Verify` returns an error unless at least one signer:
-- has a signature that verifies over `content`,
-- whose `messageDigest` signed attribute equals `H(content)`,
+- has a signature that verifies over the signed attributes (or, when it carries none, over
+  `content` directly),
+- whose `messageDigest` signed attribute, when present, equals `H(content)`,
 - and whose certificate chains to `roots` and is valid at the supplied time.
+
+When signers were present and none verified, the error satisfies
+`errors.Is(err, cms.ErrVerify)` and wraps the specific cause. Pass a non-nil `roots` pool: a
+nil one means the operating system's trust store.
 
 ## Verify a write-once resource (as signed)
 
@@ -44,7 +49,10 @@ wall clock. A detached signature over immutable bytes is a timeless fact, so an
 otherwise-valid resource does not become unverifiable merely because its leaf has
 since expired. Digest, chain, and signature checks are otherwise identical to
 `Verify`; use plain `Verify(…, now)` when you *want* expiry to bite (fresh-pull
-resources). Read the signed time with:
+resources). Note what it does not prove: the `signingTime` is asserted by the signer, so
+a holder of an expired or compromised key can mint a new signature claiming a time in the
+certificate's validity window. Use it with single-signer signatures and pair it with a
+revocation or known-good-floor policy. Read the signed time with:
 
 ```go
 t, ok, err := cms.SigningTime(sig) // ok=false when the attribute is absent
