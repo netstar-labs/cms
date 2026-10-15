@@ -6,15 +6,16 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/asn1"
 	"errors"
 	"testing"
 	"time"
 )
 
-// TestErrVerifyContract: a caller who asks errors.Is(err, ErrVerify) is asking "was this
-// authentic?". It must be true whenever SignerInfos were present and none verified, whatever the
-// signer's key type or the reason, and false for input that is not a signature at all. It used to
-// be true only for an ECDSA or Ed25519 signature mismatch.
+// TestErrVerifyContract: errors.Is(err, ErrVerify) means "the signature parsed, had signers, and
+// verification ran and failed". It must hold for every such failure whatever the signer's key type
+// or the reason, and must NOT hold for input that could not be read as a signature. It used to be
+// true only for an ECDSA or Ed25519 signature mismatch. (Non-nil of either kind means not authentic.)
 func TestErrVerifyContract(t *testing.T) {
 	now := time.Now()
 	ec, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -50,6 +51,21 @@ func TestErrVerifyContract(t *testing.T) {
 	_, err := Verify([]byte("x"), []byte("not DER"), x509.NewCertPool(), now)
 	if err == nil || errors.Is(err, ErrVerify) {
 		t.Errorf("garbage input: err = %v, want a parse error that is not ErrVerify", err)
+	}
+
+	// Readable up to the verification step but not past it: a junk element in the (attacker-chosen)
+	// certificate bundle fails to parse before any signer is checked, so it is not ErrVerify.
+	{
+		k := mustEd25519(t)
+		c, r := selfSigned(t, k)
+		s, _ := Sign([]byte("x"), c, k, SignOptions{})
+		bad := mutateSigner(t, s, func(sd *signedData, _ *signerInfo) {
+			sd.Certificates = asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true,
+				Bytes: append(append([]byte(nil), sd.Certificates.Bytes...), 0x30, 0x03, 0x02, 0x01, 0x00)}
+		})
+		if _, err := Verify([]byte("x"), bad, r, now); err == nil || errors.Is(err, ErrVerify) {
+			t.Errorf("malformed certificate in the bundle: err = %v, want a parse error that is not ErrVerify", err)
+		}
 	}
 
 	// The cause stays visible: wrapping must not hide which check failed.

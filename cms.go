@@ -48,11 +48,17 @@ var (
 	ErrNotSignedData = errors.New("cms: not a SignedData content type")
 	// ErrNoSigners is returned when SignedData carries no SignerInfo.
 	ErrNoSigners = errors.New("cms: no signers")
-	// ErrVerify is returned, or wrapped, when the signature carries signers and none of them
-	// verifies against the content and roots: a digest or signature mismatch, an untrusted
-	// or expired certificate. The wrapped error says which check failed, and with several
-	// signers it is the last signer's. Input that is not a signature at all returns a parse
-	// error or ErrNotSignedData / ErrNoSigners instead.
+	// ErrVerify is returned, or wrapped, when the signature parsed, carries signers, and none
+	// of them passed the digest, signature or chain checks against the content and roots (a
+	// digest or signature mismatch, an untrusted or expired certificate). The wrapped error says
+	// which check failed, and with several signers it is the last signer's.
+	//
+	// It is NOT returned for input that could not be parsed as a signature: a parse error,
+	// ErrNotSignedData, ErrNoSigners, a malformed certificate in the (attacker-chosen) bundle, or
+	// VerifyAsSigned failing before verification starts (its first signer's certificate is not
+	// in the bundle, or its signingTime is malformed). Whatever the error, non-nil means the
+	// signature is not authentic; use ErrVerify only to tell "verification ran and failed" from
+	// "could not read the signature".
 	ErrVerify = errors.New("cms: signature verification failed")
 )
 
@@ -210,13 +216,21 @@ func SigningTime(sig []byte) (t time.Time, ok bool, err error) {
 // cannot be altered without the signer's key — but it is asserted by the signer,
 // not attested by a time authority: a holder of the key, including an expired or
 // compromised one, can sign new content claiming any time inside the certificate's
-// validity window, or omit signingTime to anchor at NotBefore. VerifyAsSigned
-// proves the signature verifies with a key that was valid at the claimed time, not
-// that signing happened then. The anchor is the FIRST SignerInfo's signingTime, read
-// before any signer is verified, and VerifyWith applies it to every signer; use it
-// with single-signer signatures. It does NOT check revocation (see VerifyWith); pair
-// it with a revocation or known-good-floor policy if a compromised-then-expired leaf
-// is in scope.
+// validity window, or omit signingTime to anchor at NotBefore.
+//
+// WARNING — the anchor is chosen by whoever delivered the signature, not only by the
+// signer. It is the FIRST SignerInfo's signingTime, read before any signer is verified,
+// and VerifyWith applies it to every signer. A party with no key at all can prepend a
+// SignerInfo that does not verify, carrying a backdated signingTime, and a signature
+// whose certificate has expired then verifies (it is rejected by Verify at the current
+// time); the result lists only the signer that verified, so the extra SignerInfo cannot
+// be seen afterwards. A key holder can likewise claim any time in the certificate's
+// validity window. So VerifyAsSigned shows that some key valid at the claimed time
+// signed the bytes, not that signing happened then, and not that the time is genuine.
+// Do not use it on a signature whose bytes an untrusted party could have altered; use
+// Verify at the current time there. It does NOT check revocation (see VerifyWith); pair
+// it with a revocation or known-good-floor policy if a compromised-then-expired leaf is
+// in scope.
 func VerifyAsSigned(content, sig []byte, roots *x509.CertPool) ([]*x509.Certificate, error) {
 	sd, si, err := parseFirstSigner(sig)
 	if err != nil {

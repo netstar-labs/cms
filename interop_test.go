@@ -51,8 +51,8 @@ func TestOpenSSLInterop(t *testing.T) {
 			}
 
 			// openssl signs first: for Ed25519 that is also the probe for whether this openssl can do
-			// CMS EdDSA at all. Ed25519 takes SHA-512 (RFC 8419); older openssl signs ECDSA with SHA-1,
-			// which cms refuses, so the others ask for SHA-256.
+			// CMS EdDSA at all. Ed25519 takes SHA-512 (RFC 8419); LibreSSL 3.3.6 signs ECDSA with SHA-1
+			// by default, which cms refuses, so every key type asks for its hash explicitly.
 			md := "sha256"
 			if name == "ed25519" {
 				md = "sha512"
