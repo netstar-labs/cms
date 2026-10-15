@@ -474,7 +474,7 @@ func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOp
 
 	sd := signedData{
 		Version:          1,
-		DigestAlgorithms: asn1.RawValue{FullBytes: mustMarshal(digestAlgSet(digOID))},
+		DigestAlgorithms: asn1.RawValue{FullBytes: digestAlgSet(digOID)},
 		EncapContentInfo: encapContentInfo{EContentType: oidData}, // detached: no EContent
 		Certificates:     asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: cert.Raw},
 		SignerInfos:      []signerInfo{si},
