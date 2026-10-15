@@ -1,8 +1,12 @@
 //go:build interop
 
 // The interop test checks cms against the openssl cms command in both directions: openssl verifies what
-// Sign writes, and Verify accepts what openssl signs. Run it with go test -tags interop. Ed25519 needs
-// OpenSSL 3 or later; an openssl that cannot load an Ed25519 key skips those cases.
+// Sign writes, and Verify accepts what openssl signs. Run it with go test -tags interop.
+//
+// Ed25519 needs an openssl whose cms command supports EdDSA (RFC 8419). OpenSSL 3.5.0 does and passes;
+// OpenSSL 3.0.15 loads the key but fails in cms ("invalid digest"), and LibreSSL 3.3.6 cannot load an
+// Ed25519 key at all. The Ed25519 case therefore skips unless this openssl can itself sign an Ed25519
+// CMS message; it never fails because of the openssl it found.
 package cms
 
 import (
@@ -45,6 +49,22 @@ func TestOpenSSLInterop(t *testing.T) {
 				t.Skipf("this openssl cannot load a %s key: %s", name, out)
 			}
 
+			// openssl signs first: for Ed25519 that is also the probe for whether this openssl can do
+			// CMS EdDSA at all. Ed25519 takes SHA-512 (RFC 8419); older openssl signs ECDSA with SHA-1,
+			// which cms refuses, so the others ask for SHA-256.
+			md := "sha256"
+			if name == "ed25519" {
+				md = "sha512"
+			}
+			args := []string{"cms", "-sign", "-binary", "-outform", "DER", "-in", path("content"),
+				"-signer", path("cert.pem"), "-inkey", path("key.pem"), "-md", md, "-out", path("openssl.p7s")}
+			if out, err := openssl(args...); err != nil {
+				if name == "ed25519" {
+					t.Skipf("this openssl cannot sign an Ed25519 CMS message: %s", out)
+				}
+				t.Fatalf("openssl cms -sign: %v\n%s", err, out)
+			}
+
 			sig, err := Sign(content, cert, key, SignOptions{SigningTime: time.Now()})
 			if err != nil {
 				t.Fatal(err)
@@ -61,14 +81,6 @@ func TestOpenSSLInterop(t *testing.T) {
 				t.Error("openssl accepted Sign's output over tampered content")
 			}
 
-			args := []string{"cms", "-sign", "-binary", "-outform", "DER", "-in", path("content"),
-				"-signer", path("cert.pem"), "-inkey", path("key.pem"), "-out", path("openssl.p7s")}
-			if name != "ed25519" {
-				args = append(args, "-md", "sha256") // older openssl signs ECDSA with SHA-1, which cms refuses
-			}
-			if out, err := openssl(args...); err != nil {
-				t.Fatalf("openssl cms -sign: %v\n%s", err, out)
-			}
 			sig, err = os.ReadFile(path("openssl.p7s"))
 			if err != nil {
 				t.Fatal(err)
