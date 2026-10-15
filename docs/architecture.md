@@ -66,8 +66,11 @@ than attested by a time authority: a holder of the key — an expired or comprom
 included — can sign new content claiming a time inside the certificate's validity window,
 or omit it to anchor at `NotBefore`. `VerifyAsSigned` shows the signature verifies with a
 key that was valid at the claimed time, not that signing happened then. The anchor is the
-first signer's, read before any signer is verified, so use it with single-signer
-signatures; pair it with a revocation or known-good-floor policy.
+first signer's, read before any signer is verified, so a keyless attacker can prepend a junk
+SignerInfo with a backdated time and make an expired signer verify (the result lists only the
+verified signer). Do not use `VerifyAsSigned` on a signature an untrusted party could have
+altered; use `Verify` at the current time there (audit-findings D-3). Pair it with a
+revocation or known-good-floor policy.
 
 ## Sign flow
 

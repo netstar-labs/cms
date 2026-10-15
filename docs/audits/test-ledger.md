@@ -8,7 +8,7 @@ the same paths from a second angle). Classification: `unit | harness | integrati
 | Symbol | Before | After | Class | Notes |
 |---|---|---|---|---|
 | `Verify` | 100% | 100% | unit, fuzz, bench | |
-| `VerifyWith` | 87.1% | 88.2% | unit, fuzz | the wrap-with-`ErrVerify` branch is covered by `TestErrVerifyContract` |
+| `VerifyWith` / `verifyWith` | 87.1% | 100% / 90.9% | unit, fuzz | `VerifyWith` is now a wrapper over `verifyWith`; the wrap-with-`ErrVerify` branch is covered by `TestErrVerifyContract` |
 | `VerifyAsSigned` | 76.5% | 82.4% | unit, fuzz | uncovered: parse-error returns |
 | `SigningTime` | 66.7% | 83.3% | unit, fuzz | |
 | `parseFirstSigner` | 63.6% | 72.7% | unit | uncovered: malformed-input returns (fuzz reaches them) |
@@ -16,7 +16,7 @@ the same paths from a second angle). Classification: `unit | harness | integrati
 | `verifySigner` | 77.3% | 88.9% | unit, fuzz | no-signedAttrs path now covered |
 | `verifySignature` | 81.8% | 90.9% | unit | unsupported-key default unreachable with stdlib certs |
 | `parseSignedAttrs` | 68.8% | 68.8% | unit | uncovered: attribute value parse errors, absent-attribute errors (partial) |
-| `parseCertificates`, `findCert`, `hashForOID` | 83.3 / 50 / 60% | 83.3 / 83.3 / 80% | unit | SKI form and unknown SKI now covered |
+| `parseCertificates`, `findCert`, `hashForOID` | 83.3 / 50 / 60% | 91.7 / 83.3 / 80% | unit | SKI form and unknown SKI now covered |
 | `Sign` | 85.7% | 91.9% | unit | error branches covered by `TestSignRejectsBadInput` |
 | `marshalAttributeSet`, `mustMarshal`, `oidForHash` | 90.9 / 75 / 60% | 90.9 / 75 / 100% | unit | `mustMarshal`'s panic arm is unreachable from valid inputs |
 | `verifyState.digest`, `.chain` (new) | — | 100% | unit | |
