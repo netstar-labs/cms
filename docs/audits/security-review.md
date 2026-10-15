@@ -37,13 +37,13 @@ B1/B2 input; B3 the trust anchor (the caller's); B4 `VerifyOptions` passed throu
 | B1 tampering | Is the signature gated before anything is trusted? | **Yes.** `verifySignature` and `cert.Verify` both short-circuit (`cms.go` `verifySigner`). Signed bytes are the received `FullBytes` with only the tag byte swapped (V). |
 | B1 algorithm confusion | Can the attacker pick a weaker algorithm? | **No.** The key type comes from the certificate; the digest algorithm is attacker-chosen among SHA-256/384/512 but the messageDigest value and length must match, and RSA's DigestInfo OID is hash-bound. Ed25519 requires SHA-512 and that check precedes `ed25519.Verify` (V, `TestEd25519RejectsOtherHashes`). |
 | B1 signer selection | Can SKI/serial selection pick the wrong cert? | Selection can be **wrong** (D-8) but never yields a forgery: the chosen certificate must hold the signing key and chain to the roots (V). |
-| B1/B2 DoS | Unbounded work from untrusted input? | **Yes, bounded only by the caller (D-2).** Cost per SignerInfo is a signature check; F-3 removed the per-signer content hash and chain build. Residual: Ed25519 without signed attributes (1.08 s per 100 copies at 16 MiB). Certificate floods are cheap (8 ms per MB of certificates; Go caps chain-building signature checks) (V). |
+| B1/B2 DoS | Unbounded work from untrusted input? | **Yes, and `len(sig)` does not bound it (D-2).** F-3 removed the per-signer content hash and the chain rebuild for *repeated* signers. Residual: (b) Ed25519 without signed attributes, 1.08 s per 100 copies at 16 MiB; (c) each *distinct* signer certificate gets its own chain build, ~110 ms with 100 decoy intermediates and no content (20 signers: 2.24 s for 59 KB; reproduced twice, linear). A certificate flood with one signer is cheap (8 ms per MB), which is why it was first marked clean; that was wrong once signers multiply. |
 | B1 parsing | Panics, hangs, huge allocations? | None found: 20–24M `FuzzVerify` executions, a 2.4M-iteration mutation fuzz, a claimed 4 GiB length rejected in 7.5 µs, indefinite lengths rejected (V). |
-| B1 malleability | Can the signature file be altered and still verify? | **Yes, trivially (D-10):** trailing bytes and 27 positions of unsigned fields. Not a forgery. |
+| B1 malleability | Can the signature file be altered and still verify? | **Yes, trivially (D-10):** trailing bytes, non-DER `SET OF` order and a couple of dozen positions of unsigned fields. Not a forgery. |
 | B1 attribute handling | Strip or reuse signed attributes? | **D-1.** An attribute-less SignerInfo is accepted; a with-attributes signature can be turned into a valid signature over the attribute bytes (V, three key types). Impact needs a consumer that accepts attacker-shaped bytes as content, or a key that also signs raw data elsewhere. |
 | B3 trust anchor | What if the pool is wrong? | A **nil** pool means the OS trust store (D-4; mechanism V, wrong accept not reproduced). An empty pool fails closed (V). |
 | B4 policy | Who may sign under a root? | Anyone with *any* certificate under it: default `ExtKeyUsageAny`, key-usage bit unchecked (D-5, V). |
-| B5 clock | Can the time anchor be abused? | **D-3 (HIGH):** a keyless attacker re-anchors an expired signer by prepending a junk SignerInfo (V). **D-3b:** a key holder can claim any time in the validity window (V, inherent). Documented honestly now. |
+| B5 clock | Can the time anchor be abused? | **D-3 (HIGH):** a keyless attacker re-anchors an expired signer by prepending a junk SignerInfo, and the result hides it (V, three reproductions). **D-3b:** a key holder can claim any time in the validity window (V, inherent). The code comment and README now warn against using `VerifyAsSigned` on tamperable input; the fix is awaiting a decision. |
 | B6/B7 Sign | Panics, mismatched cert/key, key lifecycle? | Fixed (F-2). `Sign` uses `crypto/rand`; no secret is logged or written; the interop test writes keys to `t.TempDir()` mode 0600 (R). |
 | Repudiation / disclosure | Logging, error oracles? | The library logs nothing. Error precedence returns the last signer's error; nothing in it is secret. |
 
@@ -51,15 +51,15 @@ B1/B2 input; B3 the trust anchor (the caller's); B4 `VerifyOptions` passed throu
 
 | Rank | ID | One line | Status |
 |---|---|---|---|
-| HIGH | D-2 | CPU DoS from a small signature | partly fixed (F-3); cap = decision |
+| HIGH | D-2 (b, c) | CPU DoS from a small signature: Ed25519 without attributes; distinct signer certificates × decoy intermediates | repeated-signer case fixed (F-3); cap = decision |
 | HIGH | D-3 / D-3b | `VerifyAsSigned` anchor from an unverified first signer; key-holder backdating | decision / documented |
 | MED | D-1 | attribute-less signers accepted; attribute-strip | decision |
 | MED | D-4 | nil roots → OS trust store | decision; documented |
 | MED | D-5 | any cert under the root can sign (`ExtKeyUsageAny`) | decision; documented |
 | MED | D-6 | duplicate signer certificates returned | decision; documented |
-| LOW | D-7…D-12 | non-X.509 cert choices; SKI selection; sigAlg OIDs; trailing data; duplicate attributes; typed-nil | see ledger |
+| LOW | D-7…D-12, D-14 | non-X.509 cert choices; SKI selection; sigAlg OIDs; trailing data; duplicate attributes; typed-nil; contentType not required to be id-data | see ledger |
 
-**Confirm scope before applying any of D-1 to D-11**: each narrows or widens what `Verify` accepts or changes the bytes `Sign`
+**Confirm scope before applying any of D-1 to D-11 and D-14**: each narrows or widens what `Verify` accepts or changes the bytes `Sign`
 writes (A3 §5). None has been applied.
 
 ## 3. Checked and clean

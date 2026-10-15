@@ -1,6 +1,6 @@
 # Test ledger — `cms` (L2)
 
-Statement coverage `go test -coverprofile`: **80.3% → 87.7%** (the `-tags interop` run reports the same 87.7%, since the interop test drives
+Statement coverage `go test -coverprofile`: **80.3% → 88.6%** (the `-tags interop` run reports the same 88.6%, since the interop test drives
 the same paths from a second angle). Classification: `unit | harness | integration | fuzz | bench | n/a`; status: covered / partial / uncovered.
 
 ## Per function (after)
@@ -27,12 +27,13 @@ the same paths from a second angle). Classification: `unit | harness | integrati
 | Test | Guards | Fails before the fix? |
 |---|---|---|
 | `TestSignRejectsBadInput` | `Sign` errors, not panics; refuses a mismatched certificate | yes: 5 panics + 3 silent accepts |
-| `TestManySignersBoundedWork` | repeated SignerInfos cost ≈ one | yes: 347 ms vs 6.7 ms |
-| `TestErrVerifyContract` | `errors.Is(err, ErrVerify)` for every failure kind × key type; cause still visible | yes: 10 failures |
+| `TestManySignersBoundedWork` | one content hash and one chain build however many SignerInfos repeat a signer (counted, not timed) | mutation-checked: disabled chain cache, disabled digest cache. (The first, timing-based version failed 7 of 20 runs under load and was replaced.) |
+| `TestRepeatedBadSignerRejected` | a repeated untrusted or expired signer stays rejected: cached chain failures are replayed | mutation-checked: a cache hit that returns success |
+| `TestErrVerifyContract` | `errors.Is(err, ErrVerify)` for every verification failure kind × key type; cause still visible; **not** set for unreadable input (garbage, a malformed bundle certificate) | yes: 10 failures |
 | `TestDigestAlgorithmsIsASet` | ec4f686 wire form for RSA, ECDSA, Ed25519, independent of the builder | yes: tag 0x04 for all three |
 | `TestHashMatrix` | RSA/ECDSA with SHA-256/384/512; refusals; Ed25519 SHA-512 only | coverage |
 | `TestNoSignedAttributes` | pins the current attribute-less behaviour **pending decision D-1** (flip it if D-1 is accepted) | characterization |
-| `TestSubjectKeyIdentifierSID`, `TestMultipleSigners` | SKI-form signer; one-good-signer-is-enough; none-valid is `ErrVerify` | coverage |
+| `TestSubjectKeyIdentifierSID`, `TestMultipleSigners` | SKI-form signer; one-good-signer-is-enough in either order with one hash per algorithm and one chain per certificate; none-valid is `ErrVerify` | mutation-checked: digest cache keyed by a constant |
 | `TestConcurrentSignVerify` | no shared mutable state | `-race` |
 | `FuzzVerify` | no panic/hang; a mutated signature never verifies different content | fuzz |
 | `BenchmarkVerify`, `BenchmarkSign`, `BenchmarkParseHostile` | baselines | bench |

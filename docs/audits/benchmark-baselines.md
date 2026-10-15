@@ -16,7 +16,7 @@ fixture content for `Verify`. "Before" is the unchanged branch head (97914b9); "
 | Sign/ed25519 | 68,300 | 67,536 | −1.1% | 139 → 141 |
 | ParseHostile (junk input) | ~187 | ~182 | −3% | 6 → 6 |
 
-No regression: the +4 allocations per `Verify` are the two per-call maps. The `Sign` cost for Ed25519 includes SHA-512 over the 64 KiB content.
+No regression, and no claimed speed-up: the before/after differences (−1% to −4%) are inside run-to-run noise (a second reviewer, on a heavily loaded machine, saw ±4% and spreads up to 18%); the allocation counts are exact. The +4 allocations per `Verify` are the two per-call maps. The `Sign` cost for Ed25519 includes SHA-512 over the 64 KiB content.
 
 **Repeated-signer verification (16 MiB content, one SignerInfo repeated n times), the F-3 case:**
 
