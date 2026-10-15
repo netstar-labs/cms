@@ -208,13 +208,21 @@ func TestMultipleSigners(t *testing.T) {
 		out, _ := asn1.Marshal(ci)
 		return out
 	}
-	// c1 is not in the pool (untrusted); c2 is. One good signer is enough, in either order.
-	signers, err := Verify(content, both(s1, s2), roots, now)
-	if err != nil || len(signers) != 1 || signers[0].SerialNumber.Int64() != 99 {
-		t.Fatalf("untrusted + trusted signer: %d signers, err %v", len(signers), err)
-	}
-	if _, err := Verify([]byte("tampered"), both(s1, s2), roots, now); !errors.Is(err, ErrVerify) {
-		t.Fatalf("two signers, none valid for the content: err = %v, want ErrVerify", err)
+	// c1 is not in the pool (untrusted); c2 is. One good signer is enough, in either order, and the
+	// work is shared per digest algorithm and per certificate: SHA-512 (Ed25519) and SHA-256 (RSA),
+	// two certificates.
+	for name, sig := range map[string][]byte{"untrusted first": both(s1, s2), "trusted first": both(s2, s1)} {
+		st := newVerifyState(content)
+		signers, err := verifyWith(st, sig, verifyOpts(roots, now))
+		if err != nil || len(signers) != 1 || signers[0].SerialNumber.Int64() != 99 {
+			t.Fatalf("%s: %d signers, err %v", name, len(signers), err)
+		}
+		if st.hashed != 2 || st.chained != 2 {
+			t.Errorf("%s: content hashed %d times and %d chains built, want 2 and 2", name, st.hashed, st.chained)
+		}
+		if _, err := Verify([]byte("tampered"), sig, roots, now); !errors.Is(err, ErrVerify) {
+			t.Errorf("%s: none valid for the content: err = %v, want ErrVerify", name, err)
+		}
 	}
 }
 

@@ -10,6 +10,7 @@
 package cms
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -59,7 +60,10 @@ func TestOpenSSLInterop(t *testing.T) {
 			args := []string{"cms", "-sign", "-binary", "-outform", "DER", "-in", path("content"),
 				"-signer", path("cert.pem"), "-inkey", path("key.pem"), "-md", md, "-out", path("openssl.p7s")}
 			if out, err := openssl(args...); err != nil {
-				if name == "ed25519" {
+				// Only the failures that mean "no EdDSA in this openssl's cms" skip; any other
+				// failure is a real problem and must be seen.
+				if name == "ed25519" && (bytes.Contains(out, []byte("invalid digest")) || bytes.Contains(out, []byte("no default digest")) ||
+					bytes.Contains(out, []byte("unsupported"))) {
 					t.Skipf("this openssl cannot sign an Ed25519 CMS message: %s", out)
 				}
 				t.Fatalf("openssl cms -sign: %v\n%s", err, out)
