@@ -42,7 +42,7 @@ impossible with the standard library alone — the concrete gap this package fil
 ## Design commitments
 
 - **Standard library only.** ASN.1 via `encoding/asn1`, chains via `crypto/x509`,
-  signatures via `crypto/rsa` and `crypto/ecdsa`. No CGo, no third-party crypto.
+  signatures via `crypto/rsa`, `crypto/ecdsa` and `crypto/ed25519`. No CGo, no third-party crypto.
 - **Small and auditable.** A single file implementing exactly one CMS shape
   (detached SignedData with signed attributes). Encryption, enveloped data, and
   timestamping are explicit non-goals.
@@ -52,7 +52,8 @@ impossible with the standard library alone — the concrete gap this package fil
 
 ## Status
 
-Verification and signing are implemented and tested end to end (RSA and ECDSA,
-SHA-256/384/512, tamper / wrong-root / expiry negatives), and smoke-tested against
-OpenSSL-produced signatures for interoperability. See the
+Verification and signing are implemented and tested end to end (RSA, ECDSA and
+Ed25519, SHA-256/384/512, tamper / wrong-root / expiry negatives). An interop test
+checks both directions against `openssl cms`; it passes for RSA and ECDSA on
+LibreSSL, and its Ed25519 case is still to be run on OpenSSL 3. See the
 [architecture](architecture.md) for the CMS subset and flow.

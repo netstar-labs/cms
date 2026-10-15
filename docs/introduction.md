@@ -20,9 +20,10 @@ encapsulated type (RFC 5652 §5.4), verifies the signature over the DER `SET OF`
 attributes, and validates the signer's chain to the roots you supplied — returning
 the certificates that passed. `Sign` is the strict inverse: it builds the same
 signed attributes, sorts them into a DER `SET OF`, signs the digest with any
-`crypto.Signer`, and emits the detached `.p7s`. RSA (PKCS#1 v1.5) and ECDSA;
-SHA-256/384/512; issuer-and-serial or subject-key-identifier signers. No CGo, no
-third-party crypto — `encoding/asn1`, `crypto/x509`, `crypto/rsa`, `crypto/ecdsa`.
+`crypto.Signer`, and emits the detached `.p7s`. RSA (PKCS#1 v1.5), ECDSA and
+Ed25519 (RFC 8419); SHA-256/384/512; issuer-and-serial or subject-key-identifier signers. No CGo, no
+third-party crypto — `encoding/asn1`, `crypto/x509`, `crypto/rsa`, `crypto/ecdsa`,
+`crypto/ed25519`.
 
 The capability that earns its place: the Go standard library will validate a
 certificate chain and check a raw signature, but it ships no primitive that

@@ -57,13 +57,13 @@ same signature.
 
 ```go
 sig, err := cms.Sign(content, signerCert, signerKey, cms.SignOptions{
-    Hash:        crypto.SHA256,   // default when zero
+    Hash:        crypto.SHA256,   // default when zero; Ed25519 uses SHA-512 and refuses others
     SigningTime: time.Now(),      // omitted when zero
 })
 _ = os.WriteFile("content.p7s", sig, 0o644)
 ```
 
-`signerKey` is any `crypto.Signer` (RSA or ECDSA). The signer certificate is
+`signerKey` is any `crypto.Signer` (RSA, ECDSA or Ed25519). The signer certificate is
 embedded so a verifier can build the chain.
 
 ## Formats
@@ -78,8 +78,8 @@ embedded so a verifier can build the chain.
 
 | Kind | Supported |
 |---|---|
-| Signature | RSA PKCS#1 v1.5, ECDSA |
-| Digest | SHA-256, SHA-384, SHA-512 |
+| Signature | RSA PKCS#1 v1.5, ECDSA, Ed25519 (RFC 8419) |
+| Digest | SHA-256, SHA-384, SHA-512; SHA-512 only with Ed25519 |
 | Signer id | IssuerAndSerialNumber, SubjectKeyIdentifier |
 
 ## Supplying the trust roots

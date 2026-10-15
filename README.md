@@ -52,7 +52,8 @@ func Verify(content, sig []byte, roots *x509.CertPool, now time.Time) ([]*x509.C
 func VerifyWith(content, sig []byte, opts x509.VerifyOptions) ([]*x509.Certificate, error)
 
 // Sign produces a detached CMS SignedData over content, signed by cert/key with
-// signed attributes (contentType, messageDigest, optional signingTime).
+// signed attributes (contentType, messageDigest, optional signingTime). An
+// Ed25519 key signs by RFC 8419: SHA-512 digest, PureEdDSA over the attributes.
 func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOptions) ([]byte, error)
 
 // VerifyAsSigned is Verify anchored to the signed signingTime (or the signer's
@@ -72,14 +73,16 @@ func SigningTime(sig []byte) (t time.Time, ok bool, err error)
 |---|---|
 | `cms.go` | The library: `Verify`, `VerifyWith`, `VerifyAsSigned`, `SigningTime`, `Sign`, the RFC 5652 ASN.1 shapes, OIDs, DER helpers |
 | `cms_test.go` | Self-signed Sign→Verify round-trips (RSA + ECDSA), tamper / wrong-root / expiry negatives |
+| `ed25519_test.go` | Ed25519 round-trip, the RFC 8419 encoding, refusal of any digest but SHA-512, tampered signature |
+| `interop_test.go` | `-tags interop`: `openssl cms` verifies `Sign`'s output and `Verify` accepts `openssl cms -sign`'s, per key type |
 | `verifyassigned_test.go` | `VerifyAsSigned` over an expired-since leaf; `NotBefore` fallback; `SigningTime` round-trip |
 
 ## Scope
 
 **In:** detached SignedData verification and signing; signed attributes
 (`contentType`, `messageDigest`, `signingTime`); verify-as-signed (anchor chain
-validity to the signing instant for write-once resources); RSA (PKCS#1 v1.5) and
-ECDSA signatures; SHA-256/384/512; issuer-and-serial and subject-key-identifier
+validity to the signing instant for write-once resources); RSA (PKCS#1 v1.5),
+ECDSA and Ed25519 (RFC 8419) signatures; SHA-256/384/512; issuer-and-serial and subject-key-identifier
 signer resolution; X.509 chain verification to a caller-supplied root pool.
 
 **Out (by design):** encryption, enveloped / authenticated-enveloped data,
@@ -90,30 +93,43 @@ clear need and a matching test corpus.
 ## Standards
 
 RFC 5652 (CMS), RFC 5758 (SHA-2 signature algorithms), RFC 3370 (CMS algorithms),
+RFC 8419 (EdDSA in CMS) with RFC 8410 (Ed25519 identifiers),
 RFC 5280 (X.509 path validation, via `crypto/x509`). Consumers: RFC 9718 / RFC
 5011 (IANA root-anchors.xml distribution and trust-anchor updates).
 
 ## Testing & interoperability
 
-Beyond the unit tests (`go test ./...` — self round-trip Sign→Verify for RSA and
-ECDSA, plus tamper / wrong-root / expiry / garbage negatives), the verifier is
-**smoke-tested against a reference implementation**: detached CMS SignedData
-produced by OpenSSL/LibreSSL (`openssl cms -sign -binary … -outform DER`) is
-verified by this package, confirming spec interoperability rather than only
-self-consistency.
+`go test ./...` runs the self round-trips (RSA, ECDSA, Ed25519), the RFC 8419
+encoding checks and the tamper / wrong-root / expiry / garbage negatives.
+`go test -tags interop -run OpenSSLInterop .` checks both directions against the
+`openssl` on `PATH`, for each key type: `openssl cms -verify` must accept what
+`Sign` writes and reject it over tampered content, and `Verify` must accept what
+`openssl cms -sign -binary -outform DER` writes. An `openssl` that cannot load an
+Ed25519 key skips the Ed25519 case; it needs OpenSSL 3 or later.
 
 Verified so far:
 
-- **OpenSSL/LibreSSL RSA** detached signatures, SHA-256 and SHA-384 → accepted;
-  tampered content and an untrusting root pool → rejected.
-- **Self round-trip** RSA and ECDSA (P-256), SHA-256/384/512 → accepted.
+- **LibreSSL 3.3.6, both directions, RSA and ECDSA (P-256)**: the interop test passes.
+- **Self round-trip** RSA, ECDSA (P-256) and Ed25519 → accepted; SHA-256/384/512
+  for RSA and ECDSA, SHA-512 only for Ed25519.
+- **Ed25519 output, independently decoded**: a separate DER decoder with the pyca
+  Ed25519 verifier accepts `Sign`'s Ed25519 output: SHA-512 digest algorithms with
+  parameters absent, id-Ed25519, and a valid PureEdDSA signature over the signed
+  attributes. It rejects tampered content and a flipped signature bit.
 - **End to end**: signing and re-parsing a real KSK-2017 `root-anchors.xml`
   through `Verify` yields the published trust-anchor digest (the DNSSEC bootstrap
   use case, exercised by a consumer).
 
-(OpenSSL *ECDSA* signing was not exercised here only because the local LibreSSL
-`req`/`ecparam` CLI hung when generating the EC test cert — an environment quirk,
-not a `cms` limitation; ECDSA verification is covered by the self round-trip.)
+Not yet run: the Ed25519 case of the interop test against OpenSSL 3. Run it on a
+host with OpenSSL 3 before relying on Ed25519 `.p7s` files with partners.
+
+Older `openssl` releases sign ECDSA with SHA-1 by default, and `Verify` refuses
+SHA-1; pass `-md sha256` when producing ECDSA signatures with them.
+
+Up to v0.1.2, `Sign` encoded `SignedData.digestAlgorithms` as an OCTET STRING
+around the SET, so OpenSSL and LibreSSL rejected every signature it wrote; `Verify`
+does not read that field, which is why the round-trips missed it. Re-sign anything
+produced with v0.1.x that must verify outside this package.
 
 ## Security notes
 
