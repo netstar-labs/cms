@@ -48,7 +48,11 @@ var (
 	ErrNotSignedData = errors.New("cms: not a SignedData content type")
 	// ErrNoSigners is returned when SignedData carries no SignerInfo.
 	ErrNoSigners = errors.New("cms: no signers")
-	// ErrVerify is returned when no signer verifies against the content+roots.
+	// ErrVerify is returned, or wrapped, when the signature carries signers and none of them
+	// verifies against the content and roots: a digest or signature mismatch, an untrusted
+	// or expired certificate. The wrapped error says which check failed, and with several
+	// signers it is the last signer's. Input that is not a signature at all returns a parse
+	// error or ErrNotSignedData / ErrNoSigners instead.
 	ErrVerify = errors.New("cms: signature verification failed")
 )
 
@@ -165,6 +169,11 @@ func VerifyWith(content, sig []byte, opts x509.VerifyOptions) ([]*x509.Certifica
 		verified = append(verified, cert)
 	}
 	if len(verified) == 0 {
+		if lastErr != ErrVerify {
+			// Still wrap the cause: callers can match ErrVerify for "not authentic" and read
+			// the specific reason (digest mismatch, chain failure, …) from the message.
+			lastErr = fmt.Errorf("%w: %w", ErrVerify, lastErr)
+		}
 		return nil, lastErr
 	}
 	return verified, nil
