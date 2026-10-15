@@ -92,10 +92,17 @@ clear need and a matching test corpus.
 
 ## Standards
 
-RFC 5652 (CMS), RFC 5758 (SHA-2 signature algorithms), RFC 3370 (CMS algorithms),
+RFC 5652 (CMS), RFC 5758 (SHA-2 identifiers), RFC 3370 (CMS algorithms),
 RFC 8419 (EdDSA in CMS) with RFC 8410 (Ed25519 identifiers),
 RFC 5280 (X.509 path validation, via `crypto/x509`). Consumers: RFC 9718 / RFC
 5011 (IANA root-anchors.xml distribution and trust-anchor updates).
+
+Known deviation: for RSA and ECDSA, `Sign` writes `rsaEncryption` without the NULL
+parameters RFC 3370 §3.2 requires, and `id-ecPublicKey` where RFC 5753 §2.1.1 calls for
+`ecdsa-with-SHA256/384/512` as the `signatureAlgorithm`. OpenSSL 3.5.0, OpenSSL 3.0.15 and
+LibreSSL 3.3.6 accept the output anyway, and `Verify` never reads that field (the
+certificate's key type decides). The Ed25519 identifiers follow RFC 8419 §3.1. See
+`docs/audits/audit-findings.md` (C3).
 
 ## Testing & interoperability
 
@@ -104,42 +111,72 @@ encoding checks and the tamper / wrong-root / expiry / garbage negatives.
 `go test -tags interop -run OpenSSLInterop .` checks both directions against the
 `openssl` on `PATH`, for each key type: `openssl cms -verify` must accept what
 `Sign` writes and reject it over tampered content, and `Verify` must accept what
-`openssl cms -sign -binary -outform DER` writes. An `openssl` that cannot load an
-Ed25519 key skips the Ed25519 case; it needs OpenSSL 3 or later.
+`openssl cms -sign -binary -outform DER` writes (`-md sha512` for Ed25519, `-md sha256`
+otherwise). The Ed25519 case needs an `openssl` whose `cms` command supports EdDSA; it
+skips, rather than fails, when this one cannot sign an Ed25519 CMS message.
 
-Verified so far:
+Verified so far (each run, with `-race` where it applies):
 
-- **LibreSSL 3.3.6, both directions, RSA and ECDSA (P-256)**: the interop test passes.
-- **Self round-trip** RSA, ECDSA (P-256) and Ed25519 → accepted; SHA-256/384/512
-  for RSA and ECDSA, SHA-512 only for Ed25519.
-- **Ed25519 output, independently decoded**: a separate DER decoder with the pyca
-  Ed25519 verifier accepts `Sign`'s Ed25519 output: SHA-512 digest algorithms with
-  parameters absent, id-Ed25519, and a valid PureEdDSA signature over the signed
-  attributes. It rejects tampered content and a flipped signature bit.
-- **End to end**: signing and re-parsing a real KSK-2017 `root-anchors.xml`
-  through `Verify` yields the published trust-anchor digest (the DNSSEC bootstrap
-  use case, exercised by a consumer).
+- **OpenSSL 3.5.0, both directions, RSA, ECDSA (P-256) and Ed25519**: the interop test
+  passes, including rejection of tampered content on both sides.
+- **OpenSSL 3.0.15**: RSA and ECDSA pass; Ed25519 skips (its own `cms -sign` fails on an
+  Ed25519 key, so there is nothing to compare). **LibreSSL 3.3.6**: RSA and
+  ECDSA pass; Ed25519 skips (it cannot load an Ed25519 key). Not tested: OpenSSL 3.1 to 3.4,
+  and verifiers other than OpenSSL/LibreSSL.
+- **Self round-trip** RSA and ECDSA (P-256) with SHA-256, SHA-384 and SHA-512, and
+  Ed25519 with SHA-512 (`TestHashMatrix`); SHA-1, MD5 and other hashes are refused.
+- **Ed25519 output, independently decoded** (a manual check; the script is not in this
+  repo): a separate DER decoder with the pyca Ed25519 verifier accepts `Sign`'s output —
+  SHA-512 digest algorithms with parameters absent, id-Ed25519, and a valid PureEdDSA
+  signature over the signed attributes — and rejects tampered content and a flipped bit.
+- **Fuzzing**: `FuzzVerify` (arbitrary bytes into `Verify`, `VerifyAsSigned` and
+  `SigningTime`; a mutated signature must never verify different content) ran 13.6M
+  executions in 60 s with no panic, hang or forgery.
+- **End to end**: signing and re-parsing a real KSK-2017 `root-anchors.xml` through
+  `Verify` yields the published trust-anchor digest (reported by a downstream consumer's
+  tests; not reproduced in this repo).
 
-Not yet run: the Ed25519 case of the interop test against OpenSSL 3. Run it on a
-host with OpenSSL 3 before relying on Ed25519 `.p7s` files with partners.
+LibreSSL 3.3.6's `openssl cms -sign` signs ECDSA with SHA-1 when `-md` is not given, and
+`Verify` refuses SHA-1, so pass `-md sha256`. Other OpenSSL/LibreSSL releases were not tested.
 
-Older `openssl` releases sign ECDSA with SHA-1 by default, and `Verify` refuses
-SHA-1; pass `-md sha256` when producing ECDSA signatures with them.
-
-Up to v0.1.2, `Sign` encoded `SignedData.digestAlgorithms` as an OCTET STRING
-around the SET, so OpenSSL and LibreSSL rejected every signature it wrote; `Verify`
-does not read that field, which is why the round-trips missed it. Re-sign anything
-produced with v0.1.x that must verify outside this package.
+Up to and including v0.1.2 (v0.1.0, v0.1.1 and v0.1.2 all carry it), `Sign` encoded
+`SignedData.digestAlgorithms` as an OCTET STRING around the SET, so every RSA and ECDSA
+signature it wrote was rejected by OpenSSL 3.5.0, OpenSSL 3.0.15 and LibreSSL 3.3.6
+(`Field=digestAlgorithms … wrong tag`, tested for each); `Verify` does not read that field,
+which is why the round-trips missed it. Re-sign anything produced with v0.1.0–v0.1.2 that
+must verify outside this package — every key type and hash was affected.
 
 ## Security notes
 
 - Bootstrap trust still originates out-of-band: the root pool passed to `Verify`
   must arrive through a trusted channel (shipped with the binary or the OS store).
   CMS moves the trust root; it does not remove it.
-- Signed attributes are required for the verified path: `messageDigest` is checked
-  against `H(content)`, the `contentType` attribute must match the encapsulated
-  content type, and the signature is verified over the DER `SET OF` attributes
-  (RFC 5652 §5.4), not over the content directly.
+- Signed attributes are checked when present: `messageDigest` must equal `H(content)`,
+  the `contentType` attribute must match the encapsulated content type, and the signature
+  is verified over the DER `SET OF` attributes (RFC 5652 §5.4). A SignerInfo with **no**
+  signed attributes is also accepted — RFC 5652 §5.3 allows it for id-data — and its
+  signature is then verified directly over the content (Ed25519) or its digest (RSA and
+  ECDSA), with neither attribute checked. A signature made with attributes can therefore
+  be turned into a valid no-attributes signature over the attribute bytes themselves, so
+  do not accept arbitrary bytes as content from an untrusted party.
+- `Verify` returns `ErrVerify` (possibly wrapping the specific cause, with `errors.Is`)
+  whenever signers were present and none verified; treat any non-nil error as "not
+  authentic". With several signers the cause wrapped is the last signer's.
+- Pass a **non-nil** roots pool. A nil `x509.VerifyOptions.Roots` means the operating
+  system's trust store, so a caller whose pool failed to load would silently trust every
+  public CA. The default key usage is `ExtKeyUsageAny` and the `digitalSignature` key-usage
+  bit is not checked: any certificate under your roots can sign. Constrain it through
+  `VerifyWith` (for example `ExtKeyUsageCodeSigning`) when the roots issue other kinds.
+- `Verify` returns one entry per verified SignerInfo, so a signature that repeats one
+  SignerInfo returns the same certificate repeatedly; count distinct certificates, not
+  `len(signers)`.
+- A hostile signature can still cost CPU. The content is hashed once per digest algorithm
+  and each certificate chain is built once per call, but signatures are checked per
+  SignerInfo, and an Ed25519 signer without signed attributes verifies over the whole
+  content each time (about 11 ms per 16 MiB). Bound `len(sig)` before verifying untrusted
+  input.
+- Only DER is accepted (not indefinite-length BER), and trailing bytes after the
+  `ContentInfo` are ignored.
 
 ### Revocation
 
