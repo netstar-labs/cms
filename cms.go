@@ -151,10 +151,13 @@ func VerifyWith(content, sig []byte, opts x509.VerifyOptions) ([]*x509.Certifica
 		opts.KeyUsages = []x509.ExtKeyUsage{x509.ExtKeyUsageAny}
 	}
 
+	// One verification, however many SignerInfos the (attacker-supplied) signature repeats: the
+	// content is hashed once per digest algorithm and each certificate's chain is built once.
+	st := &verifyState{content: content, digests: map[crypto.Hash][]byte{}, chains: map[*x509.Certificate]error{}}
 	var verified []*x509.Certificate
 	var lastErr error = ErrVerify
 	for _, si := range sd.SignerInfos {
-		cert, err := verifySigner(si, content, sd.EncapContentInfo.EContentType, certs, opts)
+		cert, err := verifySigner(si, st, sd.EncapContentInfo.EContentType, certs, opts)
 		if err != nil {
 			lastErr = err
 			continue
@@ -271,7 +274,35 @@ func signingTimeFromAttrs(attrs asn1.RawValue) (time.Time, bool, error) {
 	return time.Time{}, false, nil
 }
 
-func verifySigner(si signerInfo, content []byte, eContentType asn1.ObjectIdentifier, certs []*x509.Certificate, opts x509.VerifyOptions) (*x509.Certificate, error) {
+// verifyState memoizes the two expensive, signer-independent steps of one Verify call. The chain
+// cache is keyed by certificate pointer: findCert hands back the same pointer for SignerInfos that
+// name the same certificate, and two distinct certificates never share a pointer, so a hit can only
+// be the identical certificate verified under the identical options.
+type verifyState struct {
+	content []byte
+	digests map[crypto.Hash][]byte
+	chains  map[*x509.Certificate]error
+}
+
+func (st *verifyState) digest(h crypto.Hash) []byte {
+	d, ok := st.digests[h]
+	if !ok {
+		d = digest(h, st.content)
+		st.digests[h] = d
+	}
+	return d
+}
+
+func (st *verifyState) chain(cert *x509.Certificate, opts x509.VerifyOptions) error {
+	err, ok := st.chains[cert]
+	if !ok {
+		_, err = cert.Verify(opts)
+		st.chains[cert] = err
+	}
+	return err
+}
+
+func verifySigner(si signerInfo, st *verifyState, eContentType asn1.ObjectIdentifier, certs []*x509.Certificate, opts x509.VerifyOptions) (*x509.Certificate, error) {
 	cert := findCert(certs, si.SID)
 	if cert == nil {
 		return nil, errors.New("cms: signer certificate not found")
@@ -287,39 +318,43 @@ func verifySigner(si signerInfo, content []byte, eContentType asn1.ObjectIdentif
 	// the external content, and the contentType attribute must equal the
 	// encapsulated content type (RFC 5652 §5.4).
 	var signed []byte
+	var signedDigest func() []byte // the digest RSA and ECDSA sign; Ed25519 signs the bytes themselves
 	if len(si.SignedAttrs.FullBytes) > 0 {
 		md, ct, err := parseSignedAttrs(si.SignedAttrs)
 		if err != nil {
 			return nil, err
 		}
-		if !bytes.Equal(md, digest(h, content)) {
+		if !bytes.Equal(md, st.digest(h)) {
 			return nil, errors.New("cms: messageDigest attribute mismatch")
 		}
 		if !ct.Equal(eContentType) {
 			return nil, errors.New("cms: contentType attribute mismatch")
 		}
 		signed = reencodeAsSet(si.SignedAttrs.FullBytes)
+		signedDigest = func() []byte { return digest(h, signed) }
 	} else {
-		signed = content
+		signed = st.content
+		signedDigest = func() []byte { return st.digest(h) }
 	}
 
-	if err := verifySignature(cert, h, signed, si.Signature); err != nil {
+	if err := verifySignature(cert, h, signed, signedDigest, si.Signature); err != nil {
 		return nil, err
 	}
-	if _, err := cert.Verify(opts); err != nil {
+	if err := st.chain(cert, opts); err != nil {
 		return nil, fmt.Errorf("cms: chain: %w", err)
 	}
 	return cert, nil
 }
 
-// verifySignature checks sig over the signed bytes. RSA and ECDSA sign a digest of them; Ed25519 signs the
-// bytes themselves (PureEdDSA), and RFC 8419 §3.1 requires its digest algorithm to be SHA-512.
-func verifySignature(cert *x509.Certificate, h crypto.Hash, signed, sig []byte) error {
+// verifySignature checks sig over the signed bytes. RSA and ECDSA sign a digest of them, which
+// signedDigest supplies (so it can be shared across signers); Ed25519 signs the bytes themselves
+// (PureEdDSA), and RFC 8419 §3.1 requires its digest algorithm to be SHA-512.
+func verifySignature(cert *x509.Certificate, h crypto.Hash, signed []byte, signedDigest func() []byte, sig []byte) error {
 	switch pub := cert.PublicKey.(type) {
 	case *rsa.PublicKey:
-		return rsa.VerifyPKCS1v15(pub, h, digest(h, signed), sig)
+		return rsa.VerifyPKCS1v15(pub, h, signedDigest(), sig)
 	case *ecdsa.PublicKey:
-		if !ecdsa.VerifyASN1(pub, digest(h, signed), sig) {
+		if !ecdsa.VerifyASN1(pub, signedDigest(), sig) {
 			return ErrVerify
 		}
 		return nil
