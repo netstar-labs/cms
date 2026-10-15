@@ -17,7 +17,7 @@ Baseline before any change: `go build`, `go vet`, `gofmt`, `staticcheck 2026.2.2
 |---|---|
 | Verdict on the delta | The Ed25519 signer and verifier are **sound**: Go's output verifies under OpenSSL 3.5.0 and OpenSSL 3.5.0's `-md sha512` output verifies under Go, both directions, with tamper negatives. The digestAlgorithms fix is **correct**: OpenSSL 3.5.0, OpenSSL 3.0.15 and LibreSSL 3.3.6 each reject the old encoding and accept the new. |
 | Defects in the delta | One: the new interop test was wrong (F-1). No defect in the Ed25519 production code. |
-| Fixed in this pass | F-1 to F-6 (code, tests, docs). 8 commits on top of 97914b9 (4914672 … c4032a5); the last two correct the earlier ones after sign-off review. |
+| Fixed in this pass | F-1 to F-6 (code, tests, docs). the commits on top of 97914b9, from 4914672 on; the last two correct the earlier ones after sign-off review. |
 | Needs the owner's decision | D-1 to D-11 and D-14, all pre-existing behaviour (D-12 and D-13 are recorded limits, not decisions). Two are HIGH in the security review. |
 | No CRITICAL | No way was found to make `Verify` succeed without a signature by a key chaining to the supplied roots. |
 
