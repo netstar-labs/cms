@@ -101,6 +101,28 @@ before the fixes, and failed for the reason in the finding; all pass on `2e81a74
 | D-14 | id-data only, as eContentType and contentType attribute | `51b5b9d` | `TestOnlyIDData` (id-ct-TSTInfo accepted); its contentType-attribute-only case was added after skeptic review (red with that check removed) |
 | D-12, D-13 | unchanged: recorded limits | — | — |
 
+### Skeptic review of the fixes
+
+Two independent skeptics reviewed `ea1d5fa`, one for security and one for claims and least-code, each in its own clone. **No
+forgery was found** (12.5M `FuzzVerify` executions, targeted bypasses of every fix, LibreSSL interop including `-keyid`, two
+signers and an intermediate chain; all 16 v0.1.2 RSA/ECDSA signatures still verify). Their findings, all verified by running code,
+and what was done:
+
+| ID | Sev | Finding | Disposition |
+|---|---|---|---|
+| SK-1 | **HIGH** | The DoS bound was refuted. `crypto/x509` parses RSA moduli of any size, verification cost grows with its square, and the caps did not count bundle certificates: decoy intermediates with 65536-bit keys made a 920 KB signature cost 71.5 s, and a 262144-bit leaf key cost 45 s with no chain build. The "about 0.9 s" in the README held only for P-521 decoys (measured 0.92 s). | **Fixed**: bundle certificates capped at 32 and RSA keys at 8192 bits (`crypto/tls`'s limit). Re-measured with the skeptic's harness: 920 KB case refused in 20 µs; worst case 0.28 s. `TestBundleLimits`, mutation-checked for both caps. |
+| SK-2 | MED | The D-8 candidate loop multiplies signature checks by up to 4 per SignerInfo (0.71 s → 2.85 s on a 65536-bit input). | Bounded by SK-1: 8 × 4 checks of at most 8192 bits, 66 ms measured. |
+| SK-3 | MED | D-6 deduplicated by certificate bytes, so one key under two certificates (a renewal) counted twice for M-of-N. | **Fixed**: one result per public key. `TestRepeatedSignerReportedOnce`, mutation-checked. |
+| SK-4 | LOW | A key-usage extension with no bits, or only bit 9, parses as `KeyUsage == 0` and passed the D-5 check. | **Fixed**: the extension's presence is checked as well as the bits. `TestSignerKeyUsage`, mutation-checked. |
+| SK-5 | LOW | DER malleability beyond D-10: trailing elements inside the ContentInfo, SignedData and SignerInfo sequences, a primitive retag of the signed attributes, attribute values that are not a SET, unsorted attribute SETs. Not a forgery. | Documented precisely in the README (the earlier "trailing data rejected" overstated); left, like D-10's remainder. |
+| SK-6 | LOW | The `ErrVerify` contract did not list the unsupported-digest, unreadable-SID and chain-cap cases (all `ErrVerify`). | **Fixed** in the doc comment and README. |
+| SK-7 | LOW | A signed-attribute set of many tiny unknown attributes allocates about 13 B per input byte (16 MB → 208 MB). Pre-existing, linear. | Documented; left. |
+| SK-8 | INFO | A legitimate signer behind four same-identifier certificates in one bundle is not tried. | Documented. |
+| — | INFO | LibreSSL's `cms -resign` writes the added signer without a contentType attribute, which `Verify` refuses (as v0.1.2 did). | Recorded; RFC 5652 §11.1 requires the attribute. |
+
+The claims skeptic found six wrong or unpinned claims; they were fixed in `76ce398` (two unpinned checks now tested, an order loop
+that tested one order twice, the coverage and allocation figures, the key-usage wording, and stale ledger text).
+
 ## Simplification and dedup (auditor A/B)
 
 The unpushed delta needed none. Older code could shrink by ~90 lines of `cms.go` with byte-identical `Sign` output

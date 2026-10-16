@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -232,10 +233,16 @@ func TestSignerKeyUsage(t *testing.T) {
 		x509.KeyUsageKeyEncipherment:   false,
 		x509.KeyUsageCertSign:          false,
 		x509.KeyUsageCertSign | x509.KeyUsageCRLSign: false,
+		-1: false, // an extension present with no bits set
+		-2: false, // only bit 9, which x509 does not name
 	} {
 		tmpl := &x509.Certificate{
 			SerialNumber: big.NewInt(5), Subject: pkix.Name{CommonName: "key usage"},
 			NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: usage,
+		}
+		if usage < 0 { // x509 reads both as KeyUsage 0, the same as no extension
+			bits := map[x509.KeyUsage][]byte{-1: {0x03, 0x01, 0x00}, -2: {0x03, 0x03, 0x06, 0x00, 0x40}}[usage]
+			tmpl.KeyUsage, tmpl.ExtraExtensions = 0, []pkix.Extension{{Id: oidKeyUsage, Critical: true, Value: bits}}
 		}
 		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
 		if err != nil {
@@ -265,6 +272,65 @@ func TestRepeatedSignerReportedOnce(t *testing.T) {
 	signers, err := Verify([]byte("x"), withSigners(t, sig, 3), roots, time.Now())
 	if err != nil || len(signers) != 1 {
 		t.Fatalf("3 copies of one signer: %d certificates, err %v; want 1", len(signers), err)
+	}
+
+	// Two certificates for one key, such as a renewal, are one signer to an M-of-N count.
+	renewed := newCert(t, key, 77, "renewed")
+	roots.AddCert(renewed)
+	again, err := Sign([]byte("x"), renewed, key, SignOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, si1, _ := parseFirstSigner(sig)
+	sd2, si2, _ := parseFirstSigner(again)
+	both := mutateSignedData(t, sig, func(sd *signedData) {
+		sd.Certificates = asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true,
+			Bytes: slices.Concat(sd.Certificates.Bytes, sd2.Certificates.Bytes)}
+	})
+	signers, err = Verify([]byte("x"), signersInOrder(t, both, []signerInfo{si1, si2}), roots, time.Now())
+	if err != nil || len(signers) != 1 {
+		t.Fatalf("one key under two certificates: %d signers, err %v; want 1", len(signers), err)
+	}
+}
+
+// The bundle is the attacker's: more than maxCertificates, or an RSA key over maxRSABits, is
+// refused before any signature or chain is checked. Without the limits, decoy intermediates with
+// 65536-bit keys made one 920 KB signature cost 71 s.
+func TestBundleLimits(t *testing.T) {
+	key := mustEd25519(t)
+	cert, roots := selfSigned(t, key)
+	sig, err := Sign([]byte("x"), cert, key, SignOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withBundle := func(certs ...[]byte) []byte {
+		return mutateSignedData(t, sig, func(sd *signedData) {
+			sd.Certificates = asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true,
+				Bytes: slices.Concat(append(certs, cert.Raw)...)}
+		})
+	}
+	if _, err := Verify([]byte("x"), withBundle(slices.Repeat([][]byte{cert.Raw}, maxCertificates-1)...), roots, time.Now()); err != nil {
+		t.Errorf("%d certificates: %v", maxCertificates, err)
+	}
+	if _, err := Verify([]byte("x"), withBundle(slices.Repeat([][]byte{cert.Raw}, maxCertificates)...), roots, time.Now()); err == nil || errors.Is(err, ErrVerify) {
+		t.Errorf("%d certificates: err = %v, want a refusal that is not ErrVerify", maxCertificates+1, err)
+	}
+
+	for bits, ok := range map[int]bool{maxRSABits: true, maxRSABits + 8: false} {
+		n, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), uint(bits)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		n.SetBit(n, bits-1, 1).SetBit(n, 0, 1) // exactly bits long, odd
+		tmpl := &x509.Certificate{SerialNumber: big.NewInt(3), Subject: pkix.Name{CommonName: "big RSA"},
+			NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &rsa.PublicKey{N: n, E: 65537}, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Verify([]byte("x"), withBundle(der), roots, time.Now()); (err == nil) != ok {
+			t.Errorf("a %d-bit RSA key in the bundle: err = %v, want accepted = %v", bits, err, ok)
+		}
 	}
 }
 

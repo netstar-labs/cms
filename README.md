@@ -170,11 +170,15 @@ must verify outside this package — every key type and hash was affected.
   attribute.
 - Treat **any non-nil error** from `Verify` as "not authentic". `errors.Is(err, ErrVerify)`
   additionally says that the signature parsed and had signers and that verification ran and
-  failed (the wrapped cause says which check, and with several signers it is the last signer's).
-  A malformed, repeated or multi-valued signed attribute is a signer failure, so it is
-  `ErrVerify`. It is not set for input that could not be read as a signature this package
-  accepts: a ContentInfo, SignedData or SignerInfo that does not parse, trailing data, `ErrNotSignedData`, `ErrNoSigners`, more than eight SignerInfos, content
-  that is not `id-data`, a malformed certificate in the bundle, or a nil root pool.
+  failed (the wrapped cause says which check, and with several signers it is the last signer's):
+  a digest or signature mismatch, an untrusted or expired certificate, a signer identifier that
+  names no bundle certificate, a certificate not allowed to sign, an unsupported digest
+  algorithm, a refused SignerInfo (no signed attributes, or a malformed, repeated or
+  multi-valued one), or the per-call cap on chain builds. It is not set for input that could not
+  be read as a signature this package accepts: a ContentInfo, SignedData or SignerInfo that does
+  not parse, trailing data, `ErrNotSignedData`, `ErrNoSigners`, more than eight SignerInfos,
+  content that is not `id-data`, a malformed certificate in the bundle, more than 32
+  certificates in it or an RSA key over 8192 bits, or a nil root pool.
 - `VerifyAsSigned` checks each signer's chain at that signer's own `signingTime` (or its
   certificate's `NotBefore`), read only after that signer's signature has verified, so no other
   SignerInfo can move it. A zero time is refused. The time is still the signer's claim, not a
@@ -189,17 +193,27 @@ must verify outside this package — every key type and hash was affected.
   whose extension sets no bits (RFC 5280 forbids that encoding; Go cannot tell it from absence). The extended key usage defaults to `ExtKeyUsageAny`, so any certificate
   under your roots with a suitable key usage can sign; constrain it through `VerifyWith` (for
   example `ExtKeyUsageCodeSigning`) when the roots issue other kinds.
-- `Verify` returns each verified certificate once, however many SignerInfos it verified under.
-- **Work per signature is capped.** At most eight SignerInfos, refused before they are decoded;
-  at most four bundle certificates tried per signer identifier; at most eight distinct chain
-  builds per call. The content is hashed once per digest algorithm. The audit measured a hostile
-  chain build (100 same-subject P-521 intermediates in the bundle) at about 110 ms, so the cap
-  bounds that case near 0.9 s (inferred from that measurement, not re-measured here). That is
-  still worth a deadline for untrusted input at volume.
+- `Verify` returns each verified signing key once (the first certificate it verified under),
+  however many SignerInfos or certificates name it, so an M-of-N policy can count the result.
+- **Work per signature is capped.** The bundle may hold at most 32 certificates, and none with
+  an RSA key over 8192 bits (`crypto/tls`'s limit, for the same reason: RSA verification cost
+  grows with the square of the modulus). At most eight SignerInfos, refused before they are
+  decoded; at most four bundle certificates tried per signer identifier; at most eight distinct
+  chain builds per call; the content is hashed once per digest algorithm. Measured worst cases
+  on an Apple M2 Pro: a full bundle of decoy intermediates with 8192-bit RSA keys and eight
+  signers, 0.28 s (with P-521 decoys, 0.23 s); eight signers × four 8192-bit candidates, 66 ms.
+  Before the bundle limits, oversized RSA keys made a 920 KB signature cost 71 s. A deadline is
+  still sensible for untrusted input at volume. Memory is linear in the signature's size: a
+  signed-attribute set of many tiny unknown attributes allocates about 13 bytes per input byte.
+- A legitimate signer whose identifier matches five or more certificates in one bundle (for
+  example, repeated renewals under one issuer and serial) is checked against only the first
+  four.
 - Input is parsed as DER-ish, not validated as canonical DER: indefinite-length BER and
-  trailing data are rejected, but a `SET OF` in non-DER order and unsigned fields (versions,
-  `digestAlgorithms`, the `signatureAlgorithm` OID) are tolerated, so a `.p7s` file can be
-  altered without breaking its verification. Do not use the signature's bytes as an identity.
+  trailing data after the `ContentInfo` or the `SignedData` are rejected, but a `.p7s` file can
+  still be altered without breaking its verification: extra trailing elements inside the
+  `ContentInfo`, `SignedData` and `SignerInfo` sequences, a `SET OF` in non-DER order, unsigned
+  fields (versions, `digestAlgorithms`, the `signatureAlgorithm` OID) and the tag form of the
+  signed-attributes field are tolerated. Do not use the signature's bytes as an identity.
 
 ### Revocation
 

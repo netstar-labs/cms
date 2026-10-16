@@ -81,7 +81,7 @@ are extrapolated from measured linear scaling.
 
 | Boundary | Answer now |
 |---|---|
-| B1/B2 DoS | Bounded: at most 8 SignerInfos (decoded one at a time, so a 40,000-signer signature is refused without allocating it, V `TestSignerLimit`), 4 candidate certificates per signer, 8 distinct chain builds per call (V `TestChainBudget`). With the audit's ~110 ms per hostile chain build, the chain-build worst case is about 0.9 s (I, from that measurement). Attribute-less Ed25519 is gone with D-1. |
+| B1/B2 DoS | Bounded, after a skeptic refuted the first bound (see audit-findings SK-1): at most 32 bundle certificates and no RSA key over 8192 bits; at most 8 SignerInfos, decoded one at a time (a 40,000-signer signature is refused in ~30 µs, V `TestSignerLimit`); 4 candidate certificates per signer; 8 distinct chain builds per call (V `TestChainBudget`, `TestBundleLimits`, `TestCandidateLimit`). Measured worst cases (V, Apple M2 Pro): 32-certificate bundle of 8192-bit RSA decoys with 8 signers 0.28 s, P-521 decoys 0.23 s, 8 signers × 4 8192-bit candidates 66 ms. Attribute-less Ed25519 is gone with D-1. Memory is linear, about 13 B per input byte at worst (many tiny unknown signed attributes). |
 | B1 malleability | Trailing data refused (V). Non-DER `SET OF` order and unsigned fields still tolerated: not a forgery. |
 | B1 attribute handling | Signed attributes required; contentType, messageDigest, signingTime once each with one value; id-data only (V). |
 | B1 signer selection | Every matching certificate, up to 4, is tried; an empty SKI matches nothing (V). |

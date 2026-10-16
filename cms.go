@@ -33,6 +33,7 @@ var (
 	oidContentType   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 3}
 	oidMessageDigest = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 4}
 	oidSigningTime   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}
+	oidKeyUsage      = asn1.ObjectIdentifier{2, 5, 29, 15}
 
 	oidSHA256 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
 	oidSHA384 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 2}
@@ -52,15 +53,19 @@ var (
 	ErrNoSigners = errors.New("cms: no signers")
 	// ErrVerify is returned, or wrapped, when the signature parsed, carries signers, and none
 	// of them verified: a digest or signature mismatch, an untrusted or expired certificate, a
-	// certificate not in the bundle or not allowed to sign, or a SignerInfo this package refuses
-	// (no signed attributes, or a malformed, repeated or multi-valued one). The wrapped error says
-	// which check failed, and with several signers it is the last signer's.
+	// signer identifier that names no bundle certificate (or cannot be read), a certificate not
+	// allowed to sign, an unsupported digest algorithm, a SignerInfo this package refuses (no
+	// signed attributes, or a malformed, repeated or multi-valued one), or the per-call cap on
+	// chain builds. The wrapped error says which check failed, and with several signers it is the
+	// last signer's.
 	//
 	// It is NOT returned for input that could not be read as a signature this package accepts: a
-	// ContentInfo, SignedData or SignerInfo that does not parse, trailing data, ErrNotSignedData, ErrNoSigners, more than eight SignerInfos, an
-	// encapsulated content type other than id-data, a malformed certificate in the (attacker-chosen)
-	// bundle, or a nil root pool. Whatever the error, non-nil means the signature is not authentic;
-	// use ErrVerify only to tell "verification ran and failed" from "could not read the signature".
+	// ContentInfo, SignedData or SignerInfo that does not parse, trailing data, ErrNotSignedData,
+	// ErrNoSigners, more than eight SignerInfos, an encapsulated content type other than id-data,
+	// a malformed certificate in the (attacker-chosen) bundle, more than 32 certificates in it or
+	// an RSA key over 8192 bits, or a nil root pool. Whatever the error, non-nil means the
+	// signature is not authentic; use ErrVerify only to tell "verification ran and failed" from
+	// "could not read the signature".
 	ErrVerify = errors.New("cms: signature verification failed")
 )
 
@@ -71,6 +76,13 @@ const (
 	maxSigners    = 8          // SignerInfos in one SignedData
 	maxCandidates = 4          // bundle certificates tried for one SignerInfo's identifier
 	maxChains     = maxSigners // distinct (certificate, time) chain builds in one call
+	// maxCertificates bounds the bundle. Each certificate in it is a candidate parent in every chain
+	// build, so decoys sharing an issuer's name each cost a signature check per build.
+	maxCertificates = 32
+	// maxRSABits is crypto/tls's cap on RSA keys in peer certificates, for the same reason: the cost
+	// of a verification grows with the square of the modulus, and bundle certificates are the
+	// attacker's. Without it one 65536-bit key in the bundle cost seconds per check.
+	maxRSABits = 8192
 )
 
 // ---- ASN.1 shapes (RFC 5652) ---------------------------------------------
@@ -190,9 +202,9 @@ func verifyWith(st *verifyState, sig []byte, opts x509.VerifyOptions, asSigned b
 			lastErr = err
 			continue
 		}
-		// A certificate verified under several SignerInfos is reported once, so a caller counting
-		// signers for an M-of-N policy counts certificates, not copies.
-		if !slices.ContainsFunc(verified, cert.Equal) {
+		// One signing key is reported once, however many SignerInfos or certificates it verified
+		// under, so a caller counting signers for an M-of-N policy counts keys.
+		if !slices.ContainsFunc(verified, func(c *x509.Certificate) bool { return sameKey(c, cert) }) {
 			verified = append(verified, cert)
 		}
 	}
@@ -392,8 +404,11 @@ func verifySigner(si signerInfo, st *verifyState, certs []*x509.Certificate, opt
 // verifyAs checks one candidate signer certificate: that it may sign, the signature under its key,
 // and its chain, at opts.CurrentTime or, when asSigned, at the signer's own signed time.
 func verifyAs(cert *x509.Certificate, h crypto.Hash, signed, sig []byte, attrs signedAttrs, st *verifyState, opts x509.VerifyOptions, asSigned bool) error {
-	// RFC 5280 §4.2.1.3: a certificate that lists key usages must list one for signing.
-	if cert.KeyUsage != 0 && cert.KeyUsage&(x509.KeyUsageDigitalSignature|x509.KeyUsageContentCommitment) == 0 {
+	// RFC 5280 §4.2.1.3: a certificate with a key-usage extension must list one for signing. The
+	// extension is looked for as well as the bits, because x509 parses an extension that sets no
+	// bit it knows as no key usage at all.
+	listed := cert.KeyUsage != 0 || slices.ContainsFunc(cert.Extensions, func(e pkix.Extension) bool { return e.Id.Equal(oidKeyUsage) })
+	if listed && cert.KeyUsage&(x509.KeyUsageDigitalSignature|x509.KeyUsageContentCommitment) == 0 {
 		return errors.New("cms: signer certificate's key usage does not allow signatures")
 	}
 	if err := verifySignature(cert, h, signed, sig); err != nil {
@@ -507,7 +522,10 @@ func reencodeAsSet(implicit []byte) []byte {
 
 func parseCertificates(der []byte) ([]*x509.Certificate, error) {
 	var out []*x509.Certificate
-	for len(der) > 0 {
+	for n := 0; len(der) > 0; n++ {
+		if n == maxCertificates {
+			return nil, fmt.Errorf("cms: more than %d certificates in the bundle", maxCertificates)
+		}
 		var raw asn1.RawValue
 		rest, err := asn1.Unmarshal(der, &raw)
 		if err != nil {
@@ -523,10 +541,19 @@ func parseCertificates(der []byte) ([]*x509.Certificate, error) {
 		if err != nil {
 			return nil, fmt.Errorf("cms: certificate: %w", err)
 		}
+		if k, ok := c.PublicKey.(*rsa.PublicKey); ok && k.N.BitLen() > maxRSABits {
+			return nil, fmt.Errorf("cms: certificate with a %d-bit RSA key, over the %d-bit limit", k.N.BitLen(), maxRSABits)
+		}
 		out = append(out, c)
 		der = rest
 	}
 	return out, nil
+}
+
+// sameKey reports whether a and b certify the same public key.
+func sameKey(a, b *x509.Certificate) bool {
+	k, ok := a.PublicKey.(interface{ Equal(crypto.PublicKey) bool })
+	return ok && k.Equal(b.PublicKey)
 }
 
 // findCerts returns the bundle certificates sid names. There can be several, such as a renewed
