@@ -49,18 +49,26 @@ var (
 	// ErrNoSigners is returned when SignedData carries no SignerInfo.
 	ErrNoSigners = errors.New("cms: no signers")
 	// ErrVerify is returned, or wrapped, when the signature parsed, carries signers, and none
-	// of them passed the digest, signature or chain checks against the content and roots (a
-	// digest or signature mismatch, an untrusted or expired certificate). The wrapped error says
-	// which check failed, and with several signers it is the last signer's.
+	// of them verified: a digest or signature mismatch, an untrusted or expired certificate, a
+	// certificate not in the bundle or not allowed to sign, or a SignerInfo this package refuses
+	// (no signed attributes, a repeated or multi-valued attribute). The wrapped error says which
+	// check failed, and with several signers it is the last signer's.
 	//
-	// It is NOT returned for input that could not be parsed as a signature: a parse error,
-	// ErrNotSignedData, ErrNoSigners, a malformed certificate in the (attacker-chosen) bundle, or
-	// VerifyAsSigned failing before verification starts (its first SignerInfo or signingTime
-	// attribute is malformed, or, when it has no signingTime, its certificate is not in the
-	// bundle). Whatever the error, non-nil means the
-	// signature is not authentic; use ErrVerify only to tell "verification ran and failed" from
-	// "could not read the signature".
+	// It is NOT returned for input that could not be read as a signature this package accepts: a
+	// parse error, trailing data, ErrNotSignedData, ErrNoSigners, more than eight SignerInfos, an
+	// encapsulated content type other than id-data, a malformed certificate in the (attacker-chosen)
+	// bundle, or a nil root pool. Whatever the error, non-nil means the signature is not authentic;
+	// use ErrVerify only to tell "verification ran and failed" from "could not read the signature".
 	ErrVerify = errors.New("cms: signature verification failed")
+)
+
+// Limits on the work one signature can demand. SignerInfos are decoded one at a time, so a
+// signature listing thousands is refused without decoding them; each distinct signer certificate
+// costs a chain build, which Go bounds per build but not per signature.
+const (
+	maxSigners    = 8          // SignerInfos in one SignedData
+	maxCandidates = 4          // bundle certificates tried for one SignerInfo's identifier
+	maxChains     = maxSigners // distinct (certificate, time) chain builds in one call
 )
 
 // ---- ASN.1 shapes (RFC 5652) ---------------------------------------------
@@ -77,6 +85,17 @@ type signedData struct {
 	Certificates     asn1.RawValue `asn1:"optional,tag:0"`
 	CRLs             asn1.RawValue `asn1:"optional,tag:1"`
 	SignerInfos      []signerInfo  `asn1:"set"`
+}
+
+// signedDataShape is signedData with the SignerInfos left encoded, so they can be counted as they
+// are decoded.
+type signedDataShape struct {
+	Version          int
+	DigestAlgorithms asn1.RawValue
+	EncapContentInfo encapContentInfo
+	Certificates     asn1.RawValue `asn1:"optional,tag:0"`
+	CRLs             asn1.RawValue `asn1:"optional,tag:1"`
+	SignerInfos      asn1.RawValue
 }
 
 type encapContentInfo struct {
@@ -129,11 +148,17 @@ func Verify(content, sig []byte, roots *x509.CertPool, now time.Time) ([]*x509.C
 // intermediates when opts.Intermediates is nil, so leaf→intermediate→root chains
 // verify. Revocation remains a caller responsibility on the returned certs.
 func VerifyWith(content, sig []byte, opts x509.VerifyOptions) ([]*x509.Certificate, error) {
-	return verifyWith(newVerifyState(content), sig, opts)
+	return verifyWith(newVerifyState(content), sig, opts, false)
 }
 
-// verifyWith is VerifyWith over a caller-supplied state, so tests can observe the work done.
-func verifyWith(st *verifyState, sig []byte, opts x509.VerifyOptions) ([]*x509.Certificate, error) {
+// verifyWith is VerifyWith over a caller-supplied state, so tests can observe the work done. With
+// asSigned, each signer's chain is checked at its own signed time (VerifyAsSigned).
+func verifyWith(st *verifyState, sig []byte, opts x509.VerifyOptions, asSigned bool) ([]*x509.Certificate, error) {
+	if opts.Roots == nil {
+		// x509 reads a nil Roots as the system trust store; a pool that failed to load must not
+		// silently become "trust every public CA".
+		return nil, errors.New("cms: no root pool; pass x509.SystemCertPool() to trust the system store")
+	}
 	sd, err := parseSignedData(sig)
 	if err != nil {
 		return nil, err
@@ -162,12 +187,16 @@ func verifyWith(st *verifyState, sig []byte, opts x509.VerifyOptions) ([]*x509.C
 	var verified []*x509.Certificate
 	var lastErr error = ErrVerify
 	for _, si := range sd.SignerInfos {
-		cert, err := verifySigner(si, st, sd.EncapContentInfo.EContentType, certs, opts)
+		cert, err := verifySigner(si, st, certs, opts, asSigned)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		verified = append(verified, cert)
+		// A certificate verified under several SignerInfos is reported once, so a caller counting
+		// signers for an M-of-N policy counts certificates, not copies.
+		if !slices.ContainsFunc(verified, cert.Equal) {
+			verified = append(verified, cert)
+		}
 	}
 	if len(verified) == 0 {
 		if lastErr != ErrVerify {
@@ -192,83 +221,76 @@ func SigningTime(sig []byte) (t time.Time, ok bool, err error) {
 	if len(si.SignedAttrs.FullBytes) == 0 {
 		return time.Time{}, false, nil
 	}
-	return signingTimeFromAttrs(si.SignedAttrs)
+	a, err := parseSignedAttrs(si.SignedAttrs)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return a.signingTime, a.hasSigningTime, nil
 }
 
-// VerifyAsSigned verifies sig over content but anchors certificate-chain validity
-// to the signed signingTime — or, when no signingTime is present, to the signer
-// certificate's NotBefore — instead of the current wall clock. Digest match,
-// chain to roots, and signature checks are otherwise identical to Verify.
+// VerifyAsSigned verifies sig over content but checks each signer's certificate chain at
+// that signer's signed signingTime — or, when it has none, at its certificate's NotBefore —
+// instead of the current wall clock. Digest match, chain to roots, and signature checks are
+// otherwise identical to Verify.
 //
-// Use it for write-once resources whose signer certificate may have expired since
-// signing: a detached signature over immutable bytes is a timeless fact, so an
-// otherwise-valid resource must not become unverifiable merely because a short
-// signing leaf has since expired. The signingTime is a signed attribute, so it
-// cannot be altered without the signer's key — but it is asserted by the signer,
-// not attested by a time authority: a holder of the key, including an expired or
-// compromised one, can sign new content claiming any time inside the certificate's
-// validity window, or omit signingTime to anchor at NotBefore.
+// Use it for write-once resources whose signer certificate may have expired since signing: a
+// detached signature over immutable bytes is a timeless fact, so an otherwise-valid resource must
+// not become unverifiable merely because a short signing leaf has since expired.
 //
-// WARNING — the anchor is chosen by whoever delivered the signature, not only by the
-// signer. It is the FIRST SignerInfo's signingTime, read before any signer is verified,
-// and VerifyWith applies it to every signer. A party with no key at all can prepend a
-// SignerInfo that does not verify, carrying a backdated signingTime, and a signature
-// whose certificate has expired then verifies (it is rejected by Verify at the current
-// time); the result lists only the signer that verified, so the extra SignerInfo cannot
-// be seen afterwards. A key holder can likewise claim any time in the certificate's
-// validity window. So VerifyAsSigned shows that some key valid at the claimed time
-// signed the bytes, not that signing happened then, and not that the time is genuine.
-// Do not use it on a signature whose bytes an untrusted party could have altered; use
-// Verify at the current time there. It does NOT check revocation (see VerifyWith); pair
-// it with a revocation or known-good-floor policy if a compromised-then-expired leaf is
-// in scope.
+// The time is read from each signer's own signed attributes, and only after that signer's
+// signature over them has verified, so no other SignerInfo, and nobody without the signer's key,
+// can choose it. It is still asserted by the signer, not attested by a time authority: a holder of
+// the key, including an expired or compromised one, can sign new content claiming any time inside
+// the certificate's validity window, or omit signingTime to anchor at NotBefore. So VerifyAsSigned
+// shows that a key valid at the claimed time signed the bytes, not that signing happened then. It
+// does NOT check revocation (see VerifyWith); pair it with a revocation or known-good-floor policy
+// if a compromised-then-expired leaf is in scope.
 func VerifyAsSigned(content, sig []byte, roots *x509.CertPool) ([]*x509.Certificate, error) {
-	sd, si, err := parseFirstSigner(sig)
-	if err != nil {
-		return nil, err
-	}
-
-	var anchor time.Time
-	var have bool
-	if len(si.SignedAttrs.FullBytes) > 0 {
-		if anchor, have, err = signingTimeFromAttrs(si.SignedAttrs); err != nil {
-			return nil, err
-		}
-	}
-	if !have {
-		// No signingTime: fall back to the signer's NotBefore (parse-only, since
-		// the chain is not yet verified) so the anchor still sits inside the leaf's
-		// validity window.
-		certs, err := parseCertificates(sd.Certificates.Bytes)
-		if err != nil {
-			return nil, err
-		}
-		cert := findCert(certs, si.SID)
-		if cert == nil {
-			return nil, errors.New("cms: signer certificate not found")
-		}
-		anchor = cert.NotBefore
-	}
-
-	return VerifyWith(content, sig, x509.VerifyOptions{
-		Roots:       roots,
-		CurrentTime: anchor,
-		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-	})
+	return verifyWith(newVerifyState(content), sig, x509.VerifyOptions{
+		Roots:     roots,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	}, true)
 }
 
 // parseSignedData decodes a ContentInfo carrying SignedData with at least one SignerInfo.
+// It refuses trailing data, which would let one signature take many encodings, an encapsulated
+// content type other than id-data, and more than maxSigners SignerInfos.
 func parseSignedData(sig []byte) (signedData, error) {
 	var ci contentInfo
-	if _, err := asn1.Unmarshal(sig, &ci); err != nil {
+	rest, err := asn1.Unmarshal(sig, &ci)
+	if err != nil {
 		return signedData{}, fmt.Errorf("cms: parse ContentInfo: %w", err)
+	}
+	if len(rest) > 0 {
+		return signedData{}, errors.New("cms: trailing data after ContentInfo")
 	}
 	if !ci.ContentType.Equal(oidSignedData) {
 		return signedData{}, ErrNotSignedData
 	}
-	var sd signedData
-	if _, err := asn1.Unmarshal(ci.Content.Bytes, &sd); err != nil {
+	var raw signedDataShape
+	if rest, err = asn1.Unmarshal(ci.Content.Bytes, &raw); err != nil {
 		return signedData{}, fmt.Errorf("cms: parse SignedData: %w", err)
+	}
+	if len(rest) > 0 {
+		return signedData{}, errors.New("cms: trailing data after SignedData")
+	}
+	if !raw.EncapContentInfo.EContentType.Equal(oidData) {
+		return signedData{}, fmt.Errorf("cms: content type %v, only id-data is supported", raw.EncapContentInfo.EContentType)
+	}
+	if raw.SignerInfos.Class != asn1.ClassUniversal || raw.SignerInfos.Tag != asn1.TagSet || !raw.SignerInfos.IsCompound {
+		return signedData{}, errors.New("cms: parse SignedData: signerInfos is not a SET")
+	}
+	sd := signedData{Version: raw.Version, DigestAlgorithms: raw.DigestAlgorithms,
+		EncapContentInfo: raw.EncapContentInfo, Certificates: raw.Certificates, CRLs: raw.CRLs}
+	for rest := raw.SignerInfos.Bytes; len(rest) > 0; {
+		if len(sd.SignerInfos) == maxSigners {
+			return signedData{}, fmt.Errorf("cms: more than %d SignerInfos", maxSigners)
+		}
+		var si signerInfo
+		if rest, err = asn1.Unmarshal(rest, &si); err != nil {
+			return signedData{}, fmt.Errorf("cms: parse SignerInfo: %w", err)
+		}
+		sd.SignerInfos = append(sd.SignerInfos, si)
 	}
 	if len(sd.SignerInfos) == 0 {
 		return signedData{}, ErrNoSigners
@@ -285,35 +307,15 @@ func parseFirstSigner(sig []byte) (signedData, signerInfo, error) {
 	return sd, sd.SignerInfos[0], nil
 }
 
-// signingTimeFromAttrs extracts the signingTime value from a SET OF signed
-// attributes, returning ok=false when the attribute is absent.
-func signingTimeFromAttrs(attrs asn1.RawValue) (time.Time, bool, error) {
-	rest := attrs.Bytes
-	for len(rest) > 0 {
-		var a attribute
-		var err error
-		if rest, err = asn1.Unmarshal(rest, &a); err != nil {
-			return time.Time{}, false, fmt.Errorf("cms: parse signed attribute: %w", err)
-		}
-		if a.Type.Equal(oidSigningTime) {
-			var t time.Time
-			if _, err := asn1.Unmarshal(a.Values.Bytes, &t); err != nil {
-				return time.Time{}, false, fmt.Errorf("cms: signingTime value: %w", err)
-			}
-			return t.UTC(), true, nil
-		}
-	}
-	return time.Time{}, false, nil
-}
-
 // verifyState memoizes the two expensive, signer-independent steps of one Verify call. The chain
-// cache is keyed by certificate pointer: findCert hands back the same pointer for SignerInfos that
-// name the same certificate, and two distinct certificates never share a pointer, so a hit can only
-// be the identical certificate verified under the identical options.
+// cache is keyed by certificate pointer and verification time: findCerts hands back the same
+// pointer for SignerInfos that name the same certificate, two distinct certificates never share a
+// pointer, and the options other than the time are fixed for the call, so a hit can only be the
+// identical certificate verified under the identical options.
 type verifyState struct {
 	content []byte
 	digests map[crypto.Hash][]byte
-	chains  map[*x509.Certificate]error
+	chains  map[chainKey]error
 
 	// hashed and chained count the computations actually performed, as opposed to answered from
 	// the caches; the tests assert them, which is how the memoisation is pinned without timing.
@@ -321,7 +323,12 @@ type verifyState struct {
 }
 
 func newVerifyState(content []byte) *verifyState {
-	return &verifyState{content: content, digests: map[crypto.Hash][]byte{}, chains: map[*x509.Certificate]error{}}
+	return &verifyState{content: content, digests: map[crypto.Hash][]byte{}, chains: map[chainKey]error{}}
+}
+
+type chainKey struct {
+	cert *x509.Certificate
+	at   time.Time
 }
 
 func (st *verifyState) digest(h crypto.Hash) []byte {
@@ -335,68 +342,91 @@ func (st *verifyState) digest(h crypto.Hash) []byte {
 }
 
 func (st *verifyState) chain(cert *x509.Certificate, opts x509.VerifyOptions) error {
-	err, ok := st.chains[cert]
+	k := chainKey{cert, opts.CurrentTime}
+	err, ok := st.chains[k]
 	if !ok {
+		if st.chained == maxChains {
+			return fmt.Errorf("cms: more than %d certificate chains to build", maxChains)
+		}
 		_, err = cert.Verify(opts)
-		st.chains[cert] = err
+		st.chains[k] = err
 		st.chained++
 	}
 	return err
 }
 
-func verifySigner(si signerInfo, st *verifyState, eContentType asn1.ObjectIdentifier, certs []*x509.Certificate, opts x509.VerifyOptions) (*x509.Certificate, error) {
-	cert := findCert(certs, si.SID)
-	if cert == nil {
-		return nil, errors.New("cms: signer certificate not found")
-	}
+func verifySigner(si signerInfo, st *verifyState, certs []*x509.Certificate, opts x509.VerifyOptions, asSigned bool) (*x509.Certificate, error) {
 	h, ok := hashForOID(si.DigestAlgorithm.Algorithm)
 	if !ok {
 		return nil, fmt.Errorf("cms: unsupported digest algorithm %v", si.DigestAlgorithm.Algorithm)
 	}
 
-	// Determine the bytes actually signed. With signed attributes present (the
-	// normal case, and what IANA uses), the signature is over the DER of the
-	// SET OF attributes; the messageDigest attribute must equal the digest of
-	// the external content, and the contentType attribute must equal the
-	// encapsulated content type (RFC 5652 §5.4).
-	var signed []byte
-	var signedDigest func() []byte // the digest RSA and ECDSA sign; Ed25519 signs the bytes themselves
-	if len(si.SignedAttrs.FullBytes) > 0 {
-		md, ct, err := parseSignedAttrs(si.SignedAttrs)
-		if err != nil {
-			return nil, err
-		}
-		if !bytes.Equal(md, st.digest(h)) {
-			return nil, errors.New("cms: messageDigest attribute mismatch")
-		}
-		if !ct.Equal(eContentType) {
-			return nil, errors.New("cms: contentType attribute mismatch")
-		}
-		signed = reencodeAsSet(si.SignedAttrs.FullBytes)
-		signedDigest = func() []byte { return digest(h, signed) }
-	} else {
-		signed = st.content
-		signedDigest = func() []byte { return st.digest(h) }
+	// The signature must cover signed attributes that bind the content's digest and type (RFC 5652
+	// §5.4). RFC 5652 lets id-data omit them, but then a signature made over attributes verifies as
+	// a signature over the attribute bytes themselves, and Ed25519 verifies over the whole content
+	// once per SignerInfo.
+	if len(si.SignedAttrs.FullBytes) == 0 {
+		return nil, errors.New("cms: SignerInfo has no signed attributes")
 	}
-
-	if err := verifySignature(cert, h, signed, signedDigest, si.Signature); err != nil {
+	attrs, err := parseSignedAttrs(si.SignedAttrs)
+	if err != nil {
 		return nil, err
 	}
-	if err := st.chain(cert, opts); err != nil {
-		return nil, fmt.Errorf("cms: chain: %w", err)
+	if !bytes.Equal(attrs.messageDigest, st.digest(h)) {
+		return nil, errors.New("cms: messageDigest attribute mismatch")
 	}
-	return cert, nil
+	if !attrs.contentType.Equal(oidData) { // parseSignedData admits only id-data
+		return nil, errors.New("cms: contentType attribute mismatch")
+	}
+	signed := reencodeAsSet(si.SignedAttrs.FullBytes)
+
+	candidates := findCerts(certs, si.SID)
+	if len(candidates) == 0 {
+		return nil, errors.New("cms: signer certificate not found")
+	}
+	for _, cert := range candidates[:min(len(candidates), maxCandidates)] {
+		if err = verifyAs(cert, h, signed, si.Signature, attrs, st, opts, asSigned); err == nil {
+			return cert, nil
+		}
+	}
+	return nil, err
 }
 
-// verifySignature checks sig over the signed bytes. RSA and ECDSA sign a digest of them, which
-// signedDigest supplies (so it can be shared across signers); Ed25519 signs the bytes themselves
-// (PureEdDSA), and RFC 8419 §3.1 requires its digest algorithm to be SHA-512.
-func verifySignature(cert *x509.Certificate, h crypto.Hash, signed []byte, signedDigest func() []byte, sig []byte) error {
+// verifyAs checks one candidate signer certificate: that it may sign, the signature under its key,
+// and its chain, at opts.CurrentTime or, when asSigned, at the signer's own signed time.
+func verifyAs(cert *x509.Certificate, h crypto.Hash, signed, sig []byte, attrs signedAttrs, st *verifyState, opts x509.VerifyOptions, asSigned bool) error {
+	// RFC 5280 §4.2.1.3: a certificate that lists key usages must list one for signing.
+	if cert.KeyUsage != 0 && cert.KeyUsage&(x509.KeyUsageDigitalSignature|x509.KeyUsageContentCommitment) == 0 {
+		return errors.New("cms: signer certificate's key usage does not allow signatures")
+	}
+	if err := verifySignature(cert, h, signed, sig); err != nil {
+		return err
+	}
+	if asSigned {
+		// Read only now that this signer's signature over its attributes has verified.
+		opts.CurrentTime = cert.NotBefore
+		if attrs.hasSigningTime {
+			opts.CurrentTime = attrs.signingTime
+		}
+		if opts.CurrentTime.IsZero() { // x509 would read the zero time as now
+			return errors.New("cms: signing time is the zero time")
+		}
+	}
+	if err := st.chain(cert, opts); err != nil {
+		return fmt.Errorf("cms: chain: %w", err)
+	}
+	return nil
+}
+
+// verifySignature checks sig over the signed bytes. RSA and ECDSA sign a digest of them; Ed25519
+// signs the bytes themselves (PureEdDSA), and RFC 8419 §3.1 requires its digest algorithm to be
+// SHA-512.
+func verifySignature(cert *x509.Certificate, h crypto.Hash, signed, sig []byte) error {
 	switch pub := cert.PublicKey.(type) {
 	case *rsa.PublicKey:
-		return rsa.VerifyPKCS1v15(pub, h, signedDigest(), sig)
+		return rsa.VerifyPKCS1v15(pub, h, digest(h, signed), sig)
 	case *ecdsa.PublicKey:
-		if !ecdsa.VerifyASN1(pub, signedDigest(), sig) {
+		if !ecdsa.VerifyASN1(pub, digest(h, signed), sig) {
 			return ErrVerify
 		}
 		return nil
@@ -413,34 +443,56 @@ func verifySignature(cert *x509.Certificate, h crypto.Hash, signed []byte, signe
 	}
 }
 
-// parseSignedAttrs returns the messageDigest value and the contentType OID from
-// the SET OF signed attributes; both are mandatory (RFC 5652 §5.3).
-func parseSignedAttrs(attrs asn1.RawValue) (messageDigest []byte, contentType asn1.ObjectIdentifier, err error) {
-	rest := attrs.Bytes
-	for len(rest) > 0 {
+// signedAttrs are the signed attributes Verify reads.
+type signedAttrs struct {
+	messageDigest  []byte
+	contentType    asn1.ObjectIdentifier
+	signingTime    time.Time
+	hasSigningTime bool
+}
+
+// parseSignedAttrs reads contentType and messageDigest, which are mandatory, and signingTime
+// (RFC 5652 §5.3). RFC 5652 §11 allows each of the three once, with exactly one value.
+func parseSignedAttrs(raw asn1.RawValue) (signedAttrs, error) {
+	var out signedAttrs
+	seen := map[string]bool{}
+	for rest := raw.Bytes; len(rest) > 0; {
 		var a attribute
-		rest, err = asn1.Unmarshal(rest, &a)
-		if err != nil {
-			return nil, nil, fmt.Errorf("cms: parse signed attribute: %w", err)
+		var err error
+		if rest, err = asn1.Unmarshal(rest, &a); err != nil {
+			return signedAttrs{}, fmt.Errorf("cms: parse signed attribute: %w", err)
 		}
+		var v any
 		switch {
 		case a.Type.Equal(oidMessageDigest):
-			if _, err := asn1.Unmarshal(a.Values.Bytes, &messageDigest); err != nil {
-				return nil, nil, fmt.Errorf("cms: messageDigest value: %w", err)
-			}
+			v = &out.messageDigest
 		case a.Type.Equal(oidContentType):
-			if _, err := asn1.Unmarshal(a.Values.Bytes, &contentType); err != nil {
-				return nil, nil, fmt.Errorf("cms: contentType value: %w", err)
-			}
+			v = &out.contentType
+		case a.Type.Equal(oidSigningTime):
+			v, out.hasSigningTime = &out.signingTime, true
+		default:
+			continue
+		}
+		if seen[a.Type.String()] {
+			return signedAttrs{}, fmt.Errorf("cms: signed attribute %v appears twice", a.Type)
+		}
+		seen[a.Type.String()] = true
+		extra, err := asn1.Unmarshal(a.Values.Bytes, v)
+		if err != nil {
+			return signedAttrs{}, fmt.Errorf("cms: signed attribute %v value: %w", a.Type, err)
+		}
+		if len(extra) > 0 {
+			return signedAttrs{}, fmt.Errorf("cms: signed attribute %v has more than one value", a.Type)
 		}
 	}
-	if messageDigest == nil {
-		return nil, nil, errors.New("cms: messageDigest attribute absent")
+	if out.messageDigest == nil {
+		return signedAttrs{}, errors.New("cms: messageDigest attribute absent")
 	}
-	if contentType == nil {
-		return nil, nil, errors.New("cms: contentType attribute absent")
+	if out.contentType == nil {
+		return signedAttrs{}, errors.New("cms: contentType attribute absent")
 	}
-	return messageDigest, contentType, nil
+	out.signingTime = out.signingTime.UTC()
+	return out, nil
 }
 
 // reencodeAsSet returns the DER of a SET OF from an implicit [0] tagged value by
@@ -463,6 +515,12 @@ func parseCertificates(der []byte) ([]*x509.Certificate, error) {
 		if err != nil {
 			return nil, fmt.Errorf("cms: parse certificate: %w", err)
 		}
+		// The other CertificateChoices (RFC 5652 §10.2.2: attribute and "other" certificates) are
+		// context-tagged; skip them rather than refuse a bundle that carries one.
+		if raw.Class == asn1.ClassContextSpecific {
+			der = rest
+			continue
+		}
 		c, err := x509.ParseCertificate(raw.FullBytes)
 		if err != nil {
 			return nil, fmt.Errorf("cms: certificate: %w", err)
@@ -473,27 +531,31 @@ func parseCertificates(der []byte) ([]*x509.Certificate, error) {
 	return out, nil
 }
 
-func findCert(certs []*x509.Certificate, sid asn1.RawValue) *x509.Certificate {
-	// SubjectKeyIdentifier form is [0] IMPLICIT OCTET STRING.
-	if sid.Class == asn1.ClassContextSpecific && sid.Tag == 0 {
-		for _, c := range certs {
-			if bytes.Equal(c.SubjectKeyId, sid.Bytes) {
-				return c
-			}
+// findCerts returns the bundle certificates sid names. There can be several, such as a renewed
+// certificate for the same key and SubjectKeyIdentifier, so the caller tries each.
+func findCerts(certs []*x509.Certificate, sid asn1.RawValue) []*x509.Certificate {
+	var match func(*x509.Certificate) bool
+	if sid.Class == asn1.ClassContextSpecific && sid.Tag == 0 { // [0] SubjectKeyIdentifier
+		if len(sid.Bytes) == 0 {
+			return nil // would match every certificate that has no SubjectKeyIdentifier
 		}
-		return nil
+		match = func(c *x509.Certificate) bool { return bytes.Equal(c.SubjectKeyId, sid.Bytes) }
+	} else {
+		var is issuerAndSerial
+		if _, err := asn1.Unmarshal(sid.FullBytes, &is); err != nil {
+			return nil
+		}
+		match = func(c *x509.Certificate) bool {
+			return c.SerialNumber.Cmp(is.SerialNumber) == 0 && bytes.Equal(c.RawIssuer, is.Issuer.FullBytes)
+		}
 	}
-	// IssuerAndSerialNumber form.
-	var is issuerAndSerial
-	if _, err := asn1.Unmarshal(sid.FullBytes, &is); err != nil {
-		return nil
-	}
+	var out []*x509.Certificate
 	for _, c := range certs {
-		if c.SerialNumber.Cmp(is.SerialNumber) == 0 && bytes.Equal(c.RawIssuer, is.Issuer.FullBytes) {
-			return c
+		if match(c) {
+			out = append(out, c)
 		}
 	}
-	return nil
+	return out
 }
 
 func hashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, bool) {
