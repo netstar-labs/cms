@@ -18,7 +18,7 @@ Baseline before any change: `go build`, `go vet`, `gofmt`, `staticcheck 2026.2.2
 | Verdict on the delta | The Ed25519 signer and verifier are **sound**: Go's output verifies under OpenSSL 3.5.0 and OpenSSL 3.5.0's `-md sha512` output verifies under Go, both directions, with tamper negatives. The digestAlgorithms fix is **correct**: OpenSSL 3.5.0, OpenSSL 3.0.15 and LibreSSL 3.3.6 each reject the old encoding and accept the new. |
 | Defects in the delta | One: the new interop test was wrong (F-1). No defect in the Ed25519 production code. |
 | Fixed in this pass | F-1 to F-6 (code, tests, docs). the commits on top of 97914b9, from 4914672 on; the last two correct the earlier ones after sign-off review. |
-| Needs the owner's decision | D-1 to D-11 and D-14, all pre-existing behaviour (D-12 and D-13 are recorded limits, not decisions). Two are HIGH in the security review. |
+| Owner decisions | D-1 to D-11 and D-14, all pre-existing behaviour. **Approved by the owner on 2026-10-16 and applied** in `51b5b9d` (Verify) and `2e81a74` (D-9, Sign), with S1 and D1 in `9be6a7c`; see the disposition table. D-3b, D-12 and D-13 remain recorded limits. |
 | No CRITICAL | No way was found to make `Verify` succeed without a signature by a key chaining to the supplied roots. |
 
 ## Fixed in this pass
@@ -53,9 +53,11 @@ Baseline before any change: `go build`, `go vet`, `gofmt`, `staticcheck 2026.2.2
 | — | KSK-2017 end-to-end claim | unverified here (attributed to a downstream consumer); reworded as reported |
 | — | pyca Ed25519 decode claim | reproduced by the auditor; script not in the repo; reworded as a manual check |
 
-## Needs the owner's decision (all pre-existing; none is in the delta)
+## Owner decisions (all pre-existing; none was in the delta)
 
-Each changes what `Verify` accepts or the bytes `Sign` writes. Nothing here has been applied.
+Each changes what `Verify` accepts or the bytes `Sign` writes. The owner approved the recommended option for each on 2026-10-16;
+the [disposition table](#dispositions) below records what was applied and the test that fails without it. The "Options ·
+recommendation" column is kept as the audit wrote it.
 
 | ID | Sev | Finding | Verdict | Options · recommendation |
 |---|---|---|---|---|
@@ -76,18 +78,42 @@ Each changes what `Verify` accepts or the bytes `Sign` writes. Nothing here has 
 | D-12 | LOW | A typed-nil `crypto.Signer` (e.g. `(*rsa.PrivateKey)(nil)`) still panics in `Sign`; a plain nil is now an error. | CONFIRMED | Left: checking it needs `reflect`, for a caller bug. |
 | D-13 | INFO | BER indefinite-length input (`openssl cms -sign -stream`) is rejected. | CONFIRMED | By contract (the user guide says DER). No change. |
 
+### Dispositions
+
+Each regression test is in `hardening_test.go` unless named otherwise. "Red before" means it was run against `9be6a7c`, the commit
+before the fixes, and failed for the reason in the finding; all pass on `2e81a74`.
+
+| ID | Applied | Commit | Regression test (red before) |
+|---|---|---|---|
+| D-1 | signed attributes required | `51b5b9d` | `TestNoSignedAttributesRejected` (the attribute-strip signature verified, 3 key types); replaces `TestNoSignedAttributes` |
+| D-2, D-2b, D-2d | at most 8 SignerInfos, decoded one at a time; D-1 removes the attribute-less Ed25519 path | `51b5b9d` | `TestSignerLimit` (9 and 40,000 SignerInfos verified; allocation bound) |
+| D-2c | at most 8 distinct (certificate, time) chain builds per call | `51b5b9d` | `TestChainBudget` (a 9th build ran) |
+| D-3 | `VerifyAsSigned` anchors each signer at its own signed time, read after its signature verifies; zero time refused | `51b5b9d` | `TestVerifyAsSignedAnchorPerSigner` (the junk-first order verified; the zero time verified) |
+| D-3b | not applicable: inherent to a signer-asserted time; documented | — | — |
+| D-4 | nil root pool refused | `51b5b9d` | `TestNilRootsRefused` (all three entry points went on to the system store) |
+| D-5 | key-usage bit checked (`digitalSignature` or `contentCommitment` when the extension is present); `ExtKeyUsageAny` default kept and documented | `51b5b9d` | `TestSignerKeyUsage` (keyEncipherment-only and certSign-only certificates signed) |
+| D-6 | each verified certificate returned once | `51b5b9d` | `TestRepeatedSignerReportedOnce` (3 copies returned 3 certificates) |
+| D-7 | context-tagged CertificateChoices skipped | `51b5b9d` | `TestBundleSkipsOtherCertificateChoices` ([1]–[3] elements failed the parse) |
+| D-8 | up to 4 matching certificates tried in order; empty SKI matches nothing | `51b5b9d` | `TestSignerCandidates` (expired-first rejected; empty SKI matched) |
+| D-9 | `rsaEncryption` + NULL, `ecdsa-with-SHA*` | `2e81a74` | `TestSignatureAlgorithmEncoding` (mutation: old encoding fails 6 of 6 RSA/ECDSA cases); Ed25519 output byte-identical, RSA output differs only by the NULL |
+| D-10 | trailing data after ContentInfo and SignedData refused; non-DER `SET OF` order and unsigned-field malleability remain (documented) | `51b5b9d` | `TestTrailingDataRefused` (both accepted) |
+| D-11 | contentType, messageDigest, signingTime once each, one value each | `51b5b9d` | `TestSignedAttributesOnceEach` (4 cases accepted) |
+| D-14 | id-data only, as eContentType and contentType attribute | `51b5b9d` | `TestOnlyIDData` (id-ct-TSTInfo accepted) |
+| D-12, D-13 | unchanged: recorded limits | — | — |
+
 ## Simplification and dedup (auditor A/B)
 
 The unpushed delta needed none. Older code could shrink by ~90 lines of `cms.go` with byte-identical `Sign` output
 (72 cases) and identical `Verify` accept/reject over 60,000 mutations, proven by the auditor in a scratch copy. **PLAUSIBLE**
-(auditor-verified equivalence, not re-run by a skeptic). **Not applied**: a refactor of DER encoding and the verification
-path in a cryptographic library, on the same branch as security fixes, adds review burden for no behavioural gain.
+(auditor-verified equivalence, not re-run by a skeptic). **S1 and D1 applied** in `9be6a7c`, before the security fixes and as
+their own commit: `Sign` output is byte-identical over 36 fixed RSA and Ed25519 cases (every hash, with and without signingTime,
+three content sizes). The rest are left: taste, and not worth the review burden on a security branch.
 
 | ID | Change | Est. LOC | Note |
 |---|---|---|---|
-| S1 | Use `asn1.MarshalWithParams(…,"set")` and `RawValue{Class,Tag,Bytes}` instead of the hand-written `tlvHeader`/`marshalAttributeSet`/`mustSetOf` | −27 | The only one worth doing: it is the class of code that produced the ec4f686 bug, and a `RawValue` built from parts cannot be double-wrapped. |
+| S1 | Use `asn1.MarshalWithParams(…,"set")` and `RawValue{Class,Tag,Bytes}` instead of the hand-written `tlvHeader`/`marshalAttributeSet`/`mustSetOf` | −27 | **Applied** (`9be6a7c`, as `setOf`). The class of code that produced the ec4f686 bug; a `RawValue` built from parts cannot be double-wrapped. |
 | S2 | `x509.ParseCertificates` for `parseCertificates` | −10 | error text changes |
-| D1 | One `parseSignedData` for `VerifyWith` and `parseFirstSigner` | −3…−10 | one copy of a security-boundary parse |
+| D1 | One `parseSignedData` for `VerifyWith` and `parseFirstSigner` | −3…−10 | **Applied** (`9be6a7c`); it is where the D-2, D-10 and D-14 checks now live |
 | S3, S4, S6, S7 | `retag` helper; drop two redundant guards and the repeated `KeyUsages` default; `AppendCertsFromPEM` in the example | −6, −6, −2, −13 | taste |
 | D2–D4, S5 | test cert helpers, `mustSign`, hash↔OID map | −38, −10, −12, −4 | taste |
 
@@ -116,5 +142,6 @@ still hold the signing key and chain to the roots); data races (no mutable packa
 
 ## Issues to file (not created: nothing has been pushed, and filing them is the owner's call)
 
-One `type:audit` issue per D-item with its severity, plus an umbrella "audit cleanup sweep" (`type:chore`) for S1–S7/D1–D4.
-`type:test` issues for the entries in `untestable-without-x.md`.
+The D-items are fixed on this branch, so they need no issues. Still open: D-3b (a time-authority or floor option for
+`VerifyAsSigned`), D-12 (typed-nil key), the remaining malleability in D-10 (non-DER `SET OF` order, unsigned fields), an umbrella
+"audit cleanup sweep" (`type:chore`) for S2–S7/D2–D4, and `type:test` issues for the entries in `untestable-without-x.md`.
