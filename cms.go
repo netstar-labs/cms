@@ -134,19 +134,9 @@ func VerifyWith(content, sig []byte, opts x509.VerifyOptions) ([]*x509.Certifica
 
 // verifyWith is VerifyWith over a caller-supplied state, so tests can observe the work done.
 func verifyWith(st *verifyState, sig []byte, opts x509.VerifyOptions) ([]*x509.Certificate, error) {
-	var ci contentInfo
-	if _, err := asn1.Unmarshal(sig, &ci); err != nil {
-		return nil, fmt.Errorf("cms: parse ContentInfo: %w", err)
-	}
-	if !ci.ContentType.Equal(oidSignedData) {
-		return nil, ErrNotSignedData
-	}
-	var sd signedData
-	if _, err := asn1.Unmarshal(ci.Content.Bytes, &sd); err != nil {
-		return nil, fmt.Errorf("cms: parse SignedData: %w", err)
-	}
-	if len(sd.SignerInfos) == 0 {
-		return nil, ErrNoSigners
+	sd, err := parseSignedData(sig)
+	if err != nil {
+		return nil, err
 	}
 	certs, err := parseCertificates(sd.Certificates.Bytes)
 	if err != nil {
@@ -267,22 +257,30 @@ func VerifyAsSigned(content, sig []byte, roots *x509.CertPool) ([]*x509.Certific
 	})
 }
 
-// parseFirstSigner decodes a detached CMS SignedData and returns it with its
-// first SignerInfo — the shared front half of the signingTime helpers.
-func parseFirstSigner(sig []byte) (signedData, signerInfo, error) {
+// parseSignedData decodes a ContentInfo carrying SignedData with at least one SignerInfo.
+func parseSignedData(sig []byte) (signedData, error) {
 	var ci contentInfo
 	if _, err := asn1.Unmarshal(sig, &ci); err != nil {
-		return signedData{}, signerInfo{}, fmt.Errorf("cms: parse ContentInfo: %w", err)
+		return signedData{}, fmt.Errorf("cms: parse ContentInfo: %w", err)
 	}
 	if !ci.ContentType.Equal(oidSignedData) {
-		return signedData{}, signerInfo{}, ErrNotSignedData
+		return signedData{}, ErrNotSignedData
 	}
 	var sd signedData
 	if _, err := asn1.Unmarshal(ci.Content.Bytes, &sd); err != nil {
-		return signedData{}, signerInfo{}, fmt.Errorf("cms: parse SignedData: %w", err)
+		return signedData{}, fmt.Errorf("cms: parse SignedData: %w", err)
 	}
 	if len(sd.SignerInfos) == 0 {
-		return signedData{}, signerInfo{}, ErrNoSigners
+		return signedData{}, ErrNoSigners
+	}
+	return sd, nil
+}
+
+// parseFirstSigner is parseSignedData with its first SignerInfo, for the signingTime helpers.
+func parseFirstSigner(sig []byte) (signedData, signerInfo, error) {
+	sd, err := parseSignedData(sig)
+	if err != nil {
+		return signedData{}, signerInfo{}, err
 	}
 	return sd, sd.SignerInfos[0], nil
 }
@@ -563,8 +561,8 @@ func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOp
 	}
 
 	attrs := []attribute{
-		{Type: oidContentType, Values: mustSetOf(mustMarshal(oidData))},
-		{Type: oidMessageDigest, Values: mustSetOf(mustMarshal(digest(h, content)))},
+		{Type: oidContentType, Values: setOf(mustMarshal(oidData))},
+		{Type: oidMessageDigest, Values: setOf(mustMarshal(digest(h, content)))},
 	}
 	if !opts.SigningTime.IsZero() {
 		// Not mustMarshal: the time is the caller's, and years outside 0..9999 cannot be encoded.
@@ -572,7 +570,7 @@ func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOp
 		if err != nil {
 			return nil, fmt.Errorf("cms: signingTime: %w", err)
 		}
-		attrs = append(attrs, attribute{Type: oidSigningTime, Values: mustSetOf(st)})
+		attrs = append(attrs, attribute{Type: oidSigningTime, Values: setOf(st)})
 	}
 
 	signedAttrsDER, err := marshalAttributeSet(attrs)
@@ -627,11 +625,7 @@ func marshalAttributeSet(attrs []attribute) ([]byte, error) {
 		encoded = append(encoded, b)
 	}
 	slices.SortFunc(encoded, bytes.Compare)
-	var body []byte
-	for _, e := range encoded {
-		body = append(body, e...)
-	}
-	return append(tlvHeader(0x31, len(body)), body...), nil
+	return asn1.Marshal(setOf(bytes.Join(encoded, nil)))
 }
 
 // implicitTag rewrites a universal SET (0x31…) as an implicit [0] (0xA0…).
@@ -645,8 +639,7 @@ func implicitTag(setDER []byte) []byte {
 }
 
 func digestAlgSet(oid asn1.ObjectIdentifier) []byte {
-	alg := mustMarshal(pkix.AlgorithmIdentifier{Algorithm: oid})
-	return append(tlvHeader(0x31, len(alg)), alg...)
+	return mustMarshal(setOf(mustMarshal(pkix.AlgorithmIdentifier{Algorithm: oid})))
 }
 
 func sidFromCert(cert *x509.Certificate) asn1.RawValue {
@@ -690,19 +683,8 @@ func mustMarshal(v any) []byte {
 	return b
 }
 
-// mustSetOf wraps one already-encoded value in a SET (for an Attribute's values).
-func mustSetOf(elem []byte) asn1.RawValue {
-	return asn1.RawValue{FullBytes: append(tlvHeader(0x31, len(elem)), elem...)}
-}
-
-func tlvHeader(tag byte, length int) []byte {
-	if length < 0x80 {
-		return []byte{tag, byte(length)}
-	}
-	var lb []byte
-	for length > 0 {
-		lb = append([]byte{byte(length & 0xff)}, lb...)
-		length >>= 8
-	}
-	return append([]byte{tag, byte(0x80 | len(lb))}, lb...)
+// setOf is a SET whose contents are the already-encoded, already-ordered elements in body.
+// encoding/asn1 writes the header, so the value cannot be wrapped twice by accident.
+func setOf(body []byte) asn1.RawValue {
+	return asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSet, IsCompound: true, Bytes: body}
 }
