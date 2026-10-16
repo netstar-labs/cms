@@ -102,8 +102,8 @@ func resignEd25519(t *testing.T, sig []byte, key ed25519.PrivateKey, h crypto.Ha
 	}
 	oid, _ := oidForHash(h)
 	attrs, err := marshalAttributeSet([]attribute{
-		{Type: oidContentType, Values: mustSetOf(mustMarshal(oidData))},
-		{Type: oidMessageDigest, Values: mustSetOf(mustMarshal(digest(h, content)))},
+		{Type: oidContentType, Values: setOf(mustMarshal(oidData))},
+		{Type: oidMessageDigest, Values: setOf(mustMarshal(digest(h, content)))},
 	})
 	if err != nil {
 		t.Fatal(err)
