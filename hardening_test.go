@@ -143,10 +143,9 @@ func TestVerifyAsSignedAnchorPerSigner(t *testing.T) {
 		si.SignedAttrs = asn1.RawValue{FullBytes: implicitTag(set)} // the signature no longer matches
 	})
 	_, junkSI, _ := parseFirstSigner(junk)
-	for _, order := range [][]signerInfo{{junkSI, real}, {real, junkSI}} {
-		both := mutateSigners(t, late, order)
-		if _, err := VerifyAsSigned(content, both, roots); err == nil {
-			t.Error("a junk SignerInfo's backdated signingTime let an expired signer verify")
+	for name, order := range map[string][]signerInfo{"junk first": {junkSI, real}, "junk last": {real, junkSI}} {
+		if _, err := VerifyAsSigned(content, signersInOrder(t, late, order), roots); err == nil {
+			t.Errorf("%s: a junk SignerInfo's backdated signingTime let an expired signer verify", name)
 		}
 	}
 
@@ -162,10 +161,29 @@ func TestVerifyAsSignedAnchorPerSigner(t *testing.T) {
 	}
 }
 
-// mutateSigners re-marshals sig with sis as its SignerInfos.
-func mutateSigners(t testing.TB, sig []byte, sis []signerInfo) []byte {
+// signersInOrder re-marshals sig with sis as its SignerInfos in exactly that order. encoding/asn1
+// would sort the SET OF into DER order and so choose the order for the test; Verify reads the
+// encoded order, so the SET is built from parts.
+func signersInOrder(t testing.TB, sig []byte, sis []signerInfo) []byte {
 	t.Helper()
-	return mutateSignedData(t, sig, func(sd *signedData) { sd.SignerInfos = sis })
+	sd, err := parseSignedData(sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body []byte
+	for _, si := range sis {
+		body = append(body, mustMarshal(si)...)
+	}
+	shape := signedDataShape{Version: sd.Version, DigestAlgorithms: sd.DigestAlgorithms, EncapContentInfo: sd.EncapContentInfo,
+		Certificates: sd.Certificates, CRLs: sd.CRLs, SignerInfos: setOf(body)}
+	out := mustMarshal(contentInfo{ContentType: oidSignedData,
+		Content: asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: mustMarshal(shape)}})
+	if len(sis) > 0 {
+		if got, err := parseSignedData(out); err != nil || !bytes.Equal(got.SignerInfos[0].Signature, sis[0].Signature) {
+			t.Fatalf("SignerInfos not in the requested order (err %v)", err)
+		}
+	}
+	return out
 }
 
 func mutateSignedData(t testing.TB, sig []byte, fn func(*signedData)) []byte {
@@ -387,6 +405,39 @@ func TestOnlyIDData(t *testing.T) {
 	other := signedWith(t, sig, key, attrs, func(sd *signedData, _ *signerInfo) { sd.EncapContentInfo.EContentType = tstInfo })
 	if _, err := Verify(content, other, roots, time.Now()); err == nil || errors.Is(err, ErrVerify) {
 		t.Errorf("id-ct-TSTInfo content: err = %v, want a refusal that is not ErrVerify", err)
+	}
+	// The encapsulated type left as id-data, only the signed contentType attribute changed.
+	attrOnly := signedWith(t, sig, key, attrs, nil)
+	if _, err := Verify(content, attrOnly, roots, time.Now()); !errors.Is(err, ErrVerify) {
+		t.Errorf("id-ct-TSTInfo contentType attribute over id-data: err = %v, want ErrVerify", err)
+	}
+}
+
+// D-8, D-2: at most maxCandidates certificates are tried for one signer identifier. Each is a
+// signature check, and the chain budget does not bound those, so a bundle of decoys sharing the
+// signer's issuer and serial would otherwise cost one check per decoy per SignerInfo.
+func TestCandidateLimit(t *testing.T) {
+	now := time.Now()
+	key := mustEd25519(t)
+	real := newCert(t, key, 21, "candidate")
+	roots := x509.NewCertPool()
+	roots.AddCert(real)
+	sig, err := Sign([]byte("x"), real, key, SignOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoys [][]byte // same issuer name and serial as real, another key
+	for range maxCandidates {
+		decoys = append(decoys, newCert(t, mustEd25519(t), 21, "candidate").Raw)
+	}
+	for at, ok := range map[int]bool{maxCandidates - 1: true, maxCandidates: false} {
+		bundle := slices.Concat(slices.Concat(decoys[:at]...), real.Raw)
+		s := mutateSignedData(t, sig, func(sd *signedData) {
+			sd.Certificates = asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: bundle}
+		})
+		if _, err := Verify([]byte("x"), s, roots, now); (err == nil) != ok {
+			t.Errorf("signer certificate after %d decoys: err = %v, want accepted = %v", at, err, ok)
+		}
 	}
 }
 

@@ -9,7 +9,7 @@ The library does what its documentation says once the documentation is corrected
 digestAlgorithms fix is verified against three openssl builds, and Ed25519 interoperates with OpenSSL 3.5.0 in both directions.
 One defect in the delta (the interop test itself) and four pre-existing defects were fixed; the pre-existing items that change
 what `Verify` accepts or what `Sign` writes (D-1…D-11, D-14) were then approved by the owner and fixed (`9be6a7c` to `0aff25a`). Performance is dominated by signature and chain
-verification; nothing needed optimizing except a per-signer rehash that was a denial-of-service vector (fixed for repeated signers; distinct-certificate amplification remains, D-2c).
+verification; nothing needed optimizing except a per-signer rehash that was a denial-of-service vector (fixed for repeated signers by F-3; distinct-certificate amplification, D-2c, closed later by the caps in `51b5b9d`).
 
 ## 1. Code verification against documentation
 
@@ -39,12 +39,12 @@ verification; nothing needed optimizing except a per-signer rehash that was a de
 
 | Area | Finding |
 |---|---|
-| Input boundaries | Parsers reject indefinite and non-minimal lengths; a claimed 4 GiB length fails in 7.5 µs; fuzz and a 2.4M-iteration mutation run found no panic. Trailing bytes and unsigned fields are malleable (D-10). |
+| Input boundaries | Parsers reject indefinite and non-minimal lengths; a claimed 4 GiB length fails in 7.5 µs; fuzz and a 2.4M-iteration mutation run found no panic. Trailing bytes and unsigned fields were malleable (D-10); trailing bytes are now refused (`51b5b9d`). |
 | Error handling | `Sign` panicked on caller input → fixed (F-2). `Verify` verification failures match `ErrVerify`; unreadable input deliberately does not → fixed (F-4). Typed-nil key still panics (D-12). |
 | Concurrency | No mutable package state; the package-level OID slices are read-only; `-race` clean. |
-| Resource limits | Verification cost scales with the number of SignerInfos and distinct signer certificates and is **not** bounded by `len(sig)` (D-2b, D-2c). The content is not copied (7.5 KB/op flat from 1 KiB to 64 MiB). |
-| Integer conversions | `tlvHeader` long-form lengths checked at and above 0x80 (the SHA-512 attribute set crosses it; OpenSSL 3.5.0 accepts it). No attacker-sized conversions found. |
-| Denial of service | D-2 (b, c), see the security review. Not closed: needs a cap on SignerInfos / signer certificates. |
+| Resource limits | Verification cost scales with the number of SignerInfos and distinct signer certificates and was **not** bounded by `len(sig)` (D-2b, D-2c); since `51b5b9d` it is capped at 8 SignerInfos, 4 candidates per signer and 8 chain builds. The content is not copied (7.5 KB/op flat from 1 KiB to 64 MiB). |
+| Integer conversions | `tlvHeader` (since replaced by `setOf`, `9be6a7c`) long-form lengths checked at and above 0x80 (the SHA-512 attribute set crosses it; OpenSSL 3.5.0 accepts it). No attacker-sized conversions found. |
+| Denial of service | D-2 (b, c), see the security review. Closed by the caps in `51b5b9d` (`TestSignerLimit`, `TestCandidateLimit`, `TestChainBudget`). |
 
 ## 4. Performance
 
@@ -57,13 +57,13 @@ about 7–12% of `Verify` (4.5 µs of 35–65 µs). The `VerifyAsSigned` double 
 |---|---|---|
 | Hash content once per algorithm; verify each distinct certificate once | 100× on repeated-signer input; single-signer path within noise | **Done** (F-3) |
 | Cap SignerInfos and distinct signer certificates | closes D-2b and D-2c (~110 ms per signer certificate with decoy intermediates) | **Done** (`51b5b9d`): 8 SignerInfos, 4 candidates, 8 chain builds |
-| Count repeated attributes without a map | −7 allocations per `Verify` with signingTime | **Done** (`0aff25a`) |
+| Count repeated attributes without a map | −6 allocations per `Verify` with signingTime, −4 without (measured `51b5b9d` → `0aff25a`; the commit message says seven) | **Done** (`0aff25a`) |
 | Avoid the `VerifyAsSigned` double parse | ~4 µs | not worth it |
 | Hot-path allocations | none flagged; `Verify` makes 4 more allocations since F-3 (two small maps) | accepted |
 
 ## 6. Success metrics
 
-Statement coverage 80.3% → 88.6% → 91.6%; fuzz targets 0 → 1; benchmarks 0 → 4 families; confirmed doc drifts 10 → 0 open; panics reachable
+Statement coverage 80.3% → 88.6% → 92.8%; fuzz targets 0 → 1; benchmarks 0 → 4 families; confirmed doc drifts 10 → 0 open; panics reachable
 from `Sign` caller input 5 → 0; repeated-signer verification cost linear → near-constant for signed-attribute signers.
 
 ## Self-check

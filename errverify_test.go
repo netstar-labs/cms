@@ -77,3 +77,21 @@ func TestErrVerifyContract(t *testing.T) {
 		t.Errorf("digest mismatch: %v: want ErrVerify wrapping the specific cause", err)
 	}
 }
+
+// TestSentinelErrors: the two exported sentinels for readable input that is not a signature here.
+func TestSentinelErrors(t *testing.T) {
+	key := mustEd25519(t)
+	cert, roots := selfSigned(t, key)
+	sig, err := Sign([]byte("x"), cert, key, SignOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := mustMarshal(contentInfo{ContentType: oidData,
+		Content: asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: mustMarshal([]byte("x"))}})
+	if _, err := Verify([]byte("x"), data, roots, time.Now()); !errors.Is(err, ErrNotSignedData) {
+		t.Errorf("id-data ContentInfo: err = %v, want ErrNotSignedData", err)
+	}
+	if _, err := Verify([]byte("x"), signersInOrder(t, sig, nil), roots, time.Now()); !errors.Is(err, ErrNoSigners) {
+		t.Errorf("no SignerInfos: err = %v, want ErrNoSigners", err)
+	}
+}

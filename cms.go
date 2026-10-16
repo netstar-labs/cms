@@ -53,11 +53,11 @@ var (
 	// ErrVerify is returned, or wrapped, when the signature parsed, carries signers, and none
 	// of them verified: a digest or signature mismatch, an untrusted or expired certificate, a
 	// certificate not in the bundle or not allowed to sign, or a SignerInfo this package refuses
-	// (no signed attributes, a repeated or multi-valued attribute). The wrapped error says which
-	// check failed, and with several signers it is the last signer's.
+	// (no signed attributes, or a malformed, repeated or multi-valued one). The wrapped error says
+	// which check failed, and with several signers it is the last signer's.
 	//
 	// It is NOT returned for input that could not be read as a signature this package accepts: a
-	// parse error, trailing data, ErrNotSignedData, ErrNoSigners, more than eight SignerInfos, an
+	// ContentInfo, SignedData or SignerInfo that does not parse, trailing data, ErrNotSignedData, ErrNoSigners, more than eight SignerInfos, an
 	// encapsulated content type other than id-data, a malformed certificate in the (attacker-chosen)
 	// bundle, or a nil root pool. Whatever the error, non-nil means the signature is not authentic;
 	// use ErrVerify only to tell "verification ran and failed" from "could not read the signature".
@@ -137,11 +137,7 @@ type attribute struct {
 // chain build and then check the returned signer certificate against a CRL or
 // OCSP responder — see the security notes and example/revoke.
 func Verify(content, sig []byte, roots *x509.CertPool, now time.Time) ([]*x509.Certificate, error) {
-	return VerifyWith(content, sig, x509.VerifyOptions{
-		Roots:       roots,
-		CurrentTime: now,
-		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-	})
+	return VerifyWith(content, sig, x509.VerifyOptions{Roots: roots, CurrentTime: now})
 }
 
 // VerifyWith is Verify with caller-controlled chain verification. The signer
@@ -214,7 +210,9 @@ func verifyWith(st *verifyState, sig []byte, opts x509.VerifyOptions, asSigned b
 // SigningTime returns the signed signingTime attribute of sig's first signer, or
 // ok=false when the signature carries none. It parses without verifying, so the
 // value is trustworthy only once Verify/VerifyWith/VerifyAsSigned has succeeded
-// over the same signature and content.
+// over the same signature and content. It reads with Verify's rules, so it returns
+// an error for a signature Verify could not read and for signed attributes Verify
+// refuses (contentType or messageDigest missing, an attribute repeated or multi-valued).
 func SigningTime(sig []byte) (t time.Time, ok bool, err error) {
 	_, si, err := parseFirstSigner(sig)
 	if err != nil {
@@ -248,10 +246,7 @@ func SigningTime(sig []byte) (t time.Time, ok bool, err error) {
 // does NOT check revocation (see VerifyWith); pair it with a revocation or known-good-floor policy
 // if a compromised-then-expired leaf is in scope.
 func VerifyAsSigned(content, sig []byte, roots *x509.CertPool) ([]*x509.Certificate, error) {
-	return verifyWith(newVerifyState(content), sig, x509.VerifyOptions{
-		Roots:     roots,
-		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-	}, true)
+	return verifyWith(newVerifyState(content), sig, x509.VerifyOptions{Roots: roots}, true)
 }
 
 // parseSignedData decodes a ContentInfo carrying SignedData with at least one SignerInfo.

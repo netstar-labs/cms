@@ -1,22 +1,22 @@
 # Test ledger — `cms` (L2)
 
-Statement coverage `go test -coverprofile`: **80.3% → 88.6%** after the first fix pass, **91.6%** after the owner-approved fixes
-(`0aff25a`). Classification: `unit | harness | integration | fuzz | bench | n/a`; status: covered / partial / uncovered.
+Statement coverage `go test -coverprofile`: **80.3% → 88.6%** after the first fix pass, **92.8%** after the owner-approved fixes
+and the skeptic follow-ups (91.6% at `2e81a74`, 91.7% at `0aff25a`). Classification: `unit | harness | integration | fuzz | bench | n/a`;
+status: covered / partial / uncovered.
 
-## Per function (at `0aff25a`)
+## Per function (after the skeptic follow-ups)
 
 | Symbol | Coverage | Class | Notes |
 |---|---|---|---|
-| `Verify`, `VerifyWith`, `verifyWith`, `VerifyAsSigned` | 100% | unit, fuzz, bench | |
-| `SigningTime` | 77.8% | unit, fuzz | uncovered: parse-error returns |
-| `parseSignedData` | 82.1% | unit, fuzz | uncovered: a `signerInfos` that is not a SET, a malformed SignerInfo (fuzz reaches them) |
-| `parseFirstSigner` | 100% | unit | |
-| `verifySigner` / `verifyAs` | 90.0% / 100% | unit, fuzz | uncovered: unsupported digest algorithm |
+| `Verify`, `VerifyWith`, `verifyWith`, `VerifyAsSigned`, `parseFirstSigner`, `verifyAs` | 100% | unit, fuzz, bench | |
+| `SigningTime` | 77.8% | unit, fuzz | uncovered: no-attributes and attribute-error returns |
+| `parseSignedData` | 89.3% | unit, fuzz | uncovered: SignedData, non-SET `signerInfos` and SignerInfo parse errors (fuzz reaches them) |
+| `verifySigner` | 95.0% | unit, fuzz | uncovered: unsupported digest algorithm |
 | `verifySignature` | 90.9% | unit | unsupported-key default unreachable with stdlib certificates |
-| `parseSignedAttrs` | 81.5% | unit | uncovered: attribute value parse errors, absent contentType |
-| `parseCertificates`, `findCerts`, `hashForOID` | 93.3 / 93.8 / 80% | unit | |
+| `parseSignedAttrs` | 82.1% | unit | uncovered: attribute and value parse errors, absent messageDigest or contentType; the unknown-attribute skip |
+| `parseCertificates`, `findCerts`, `hashForOID` | 93.3 / 93.8 / 80% | unit | uncovered: a bundle element that does not parse, a malformed issuerAndSerial, an unknown digest OID |
 | `verifyState.digest`, `.chain` | 100% | unit | the chain budget by `TestChainBudget` |
-| `Sign`, `marshalAttributeSet`, `mustMarshal` | 91.9 / 87.5 / 75% | unit | `mustMarshal`'s panic arm is unreachable from valid inputs |
+| `Sign`, `marshalAttributeSet`, `mustMarshal` | 91.9 / 87.5 / 75% | unit | uncovered: errors from `key.Sign` and from marshalling, `mustMarshal`'s panic arm (unreachable from valid inputs) |
 | `sigAlgFor`, `setOf`, `oidForHash`, `reencodeAsSet`, `implicitTag`, `digestAlgSet`, `sidFromCert`, `digest` | 100% | unit | |
 
 ## Tests added
@@ -30,7 +30,8 @@ Statement coverage `go test -coverprofile`: **80.3% → 88.6%** after the first 
 | `TestDigestAlgorithmsIsASet` | ec4f686 wire form for RSA, ECDSA, Ed25519, independent of the builder | yes: tag 0x04 for all three |
 | `TestHashMatrix` | RSA/ECDSA with SHA-256/384/512; refusals; Ed25519 SHA-512 only | coverage |
 | `TestNoSignedAttributes` | pinned the attribute-less behaviour pending D-1; **removed** when D-1 was fixed (`51b5b9d`) | characterization |
-| `hardening_test.go` (13 tests) | one per owner-approved fix, D-1 to D-14: see the [disposition table](audit-findings.md#dispositions) | yes: each red against `9be6a7c`; D-9 by mutation |
+| `hardening_test.go` (14 tests) | one per owner-approved fix, D-1 to D-14, plus `TestCandidateLimit`: see the [disposition table](audit-findings.md#dispositions) | yes: 13 red against `9be6a7c`; D-9, `TestCandidateLimit` and the D-14 attribute case by mutation |
+| `TestSentinelErrors` | `ErrNotSignedData` and `ErrNoSigners` are returned and matchable | coverage (they had no test) |
 | `TestSubjectKeyIdentifierSID`, `TestMultipleSigners` | SKI-form signer; one-good-signer-is-enough in either order with one hash per algorithm and one chain per certificate; none-valid is `ErrVerify` | mutation-checked: digest cache keyed by a constant |
 | `TestConcurrentSignVerify` | no shared mutable state | `-race` |
 | `FuzzVerify` | no panic/hang; a mutated signature never verifies different content | fuzz |
@@ -39,6 +40,8 @@ Statement coverage `go test -coverprofile`: **80.3% → 88.6%** after the first 
 
 ## Still uncovered
 
-`parseSignedAttrs` attribute-value error returns and the absent-contentType return; `parseSignedData`'s non-SET `signerInfos` and
-malformed-SignerInfo returns, and `SigningTime`'s parse-error returns (reached by fuzz, not asserted); `mustMarshal`'s panic arm;
-the unsupported-public-key default in `verifySignature`; the unsupported-digest return in `verifySigner`.
+From the coverage profile (every count-0 block): `SigningTime`'s no-attributes and attribute-error returns; `parseSignedData`'s
+SignedData, non-SET `signerInfos` and SignerInfo parse errors; `verifySigner`'s unsupported digest; `verifySignature`'s
+unsupported-key default; `parseSignedAttrs`'s attribute and value parse errors, absent messageDigest/contentType and unknown-attribute
+skip; `parseCertificates`' element parse error; `findCerts`' malformed issuerAndSerial; `hashForOID`'s unknown OID; `Sign`'s `key.Sign`,
+marshal and attribute-set errors; `mustMarshal`'s panic arm. The parse errors are reached by `FuzzVerify` but not asserted.

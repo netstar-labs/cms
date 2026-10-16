@@ -86,19 +86,19 @@ before the fixes, and failed for the reason in the finding; all pass on `2e81a74
 | ID | Applied | Commit | Regression test (red before) |
 |---|---|---|---|
 | D-1 | signed attributes required | `51b5b9d` | `TestNoSignedAttributesRejected` (the attribute-strip signature verified, 3 key types); replaces `TestNoSignedAttributes` |
-| D-2, D-2b, D-2d | at most 8 SignerInfos, decoded one at a time; D-1 removes the attribute-less Ed25519 path | `51b5b9d` | `TestSignerLimit` (9 and 40,000 SignerInfos verified; allocation bound) |
+| D-2, D-2b, D-2d | at most 8 SignerInfos, decoded one at a time; at most 4 candidate certificates per signer identifier; D-1 removes the attribute-less Ed25519 path. The README's earlier advice to use a resource-limited worker is replaced by the documented caps | `51b5b9d` | `TestSignerLimit` (9 and 40,000 SignerInfos verified; allocation bound); `TestCandidateLimit` (added after skeptic review; red with the cap removed) |
 | D-2c | at most 8 distinct (certificate, time) chain builds per call | `51b5b9d` | `TestChainBudget` (a 9th build ran) |
 | D-3 | `VerifyAsSigned` anchors each signer at its own signed time, read after its signature verifies; zero time refused | `51b5b9d` | `TestVerifyAsSignedAnchorPerSigner` (the junk-first order verified; the zero time verified) |
 | D-3b | not applicable: inherent to a signer-asserted time; documented | — | — |
 | D-4 | nil root pool refused | `51b5b9d` | `TestNilRootsRefused` (all three entry points went on to the system store) |
-| D-5 | key-usage bit checked (`digitalSignature` or `contentCommitment` when the extension is present); `ExtKeyUsageAny` default kept and documented | `51b5b9d` | `TestSignerKeyUsage` (keyEncipherment-only and certSign-only certificates signed) |
+| D-5 | key-usage bit checked (`digitalSignature` or `contentCommitment` when any key usage is listed, the audit's `KeyUsage != 0` rule; an extension with no bits, which RFC 5280 forbids, reads as absent); `ExtKeyUsageAny` default kept and documented | `51b5b9d` | `TestSignerKeyUsage` (keyEncipherment-only and certSign-only certificates signed) |
 | D-6 | each verified certificate returned once | `51b5b9d` | `TestRepeatedSignerReportedOnce` (3 copies returned 3 certificates) |
 | D-7 | context-tagged CertificateChoices skipped | `51b5b9d` | `TestBundleSkipsOtherCertificateChoices` ([1]–[3] elements failed the parse) |
 | D-8 | up to 4 matching certificates tried in order; empty SKI matches nothing | `51b5b9d` | `TestSignerCandidates` (expired-first rejected; empty SKI matched) |
 | D-9 | `rsaEncryption` + NULL, `ecdsa-with-SHA*` | `2e81a74` | `TestSignatureAlgorithmEncoding` (mutation: old encoding fails 6 of 6 RSA/ECDSA cases); Ed25519 output byte-identical, RSA output differs only by the NULL |
 | D-10 | trailing data after ContentInfo and SignedData refused; non-DER `SET OF` order and unsigned-field malleability remain (documented) | `51b5b9d` | `TestTrailingDataRefused` (both accepted) |
 | D-11 | contentType, messageDigest, signingTime once each, one value each | `51b5b9d` | `TestSignedAttributesOnceEach` (4 cases accepted) |
-| D-14 | id-data only, as eContentType and contentType attribute | `51b5b9d` | `TestOnlyIDData` (id-ct-TSTInfo accepted) |
+| D-14 | id-data only, as eContentType and contentType attribute | `51b5b9d` | `TestOnlyIDData` (id-ct-TSTInfo accepted); its contentType-attribute-only case was added after skeptic review (red with that check removed) |
 | D-12, D-13 | unchanged: recorded limits | — | — |
 
 ## Simplification and dedup (auditor A/B)
