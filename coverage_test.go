@@ -106,7 +106,7 @@ func TestDigestAlgorithmsIsASet(t *testing.T) {
 }
 
 // TestSubjectKeyIdentifierSID: openssl's -keyid names the signer by [0] SubjectKeyIdentifier rather
-// than by issuer and serial; findCert had no test for that form.
+// than by issuer and serial; findCerts had no test for that form.
 func TestSubjectKeyIdentifierSID(t *testing.T) {
 	now := time.Now()
 	for name, key := range allKeys(t) {
@@ -154,21 +154,14 @@ func TestMultipleSigners(t *testing.T) {
 		t.Fatal(err)
 	}
 	both := func(a, b []byte) []byte {
-		var ci contentInfo
-		asn1.Unmarshal(a, &ci)
 		sdA, siA, _ := parseFirstSigner(a)
 		sdB, siB, _ := parseFirstSigner(b)
 		// a parsed RawValue re-marshals from FullBytes, so build a fresh [0] holding both bundles
-		sdA.Certificates = asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true,
-			Bytes: slices.Concat(sdA.Certificates.Bytes, sdB.Certificates.Bytes)}
-		sdA.SignerInfos = []signerInfo{siA, siB}
-		der, err := asn1.Marshal(sdA)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ci.Content = asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: der}
-		out, _ := asn1.Marshal(ci)
-		return out
+		withCerts := mutateSignedData(t, a, func(sd *signedData) {
+			sd.Certificates = asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true,
+				Bytes: slices.Concat(sdA.Certificates.Bytes, sdB.Certificates.Bytes)}
+		})
+		return signersInOrder(t, withCerts, []signerInfo{siA, siB})
 	}
 	// c1 is not in the pool (untrusted); c2 is. One good signer is enough, in either order, and the
 	// work is shared per digest algorithm and per certificate: SHA-512 (Ed25519) and SHA-256 (RSA),

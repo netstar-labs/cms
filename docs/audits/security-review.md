@@ -32,6 +32,9 @@ B1/B2 input; B3 the trust anchor (the caller's); B4 `VerifyOptions` passed throu
 
 ## 1. Per-boundary answers
 
+As found by the review, before the owner-approved fixes; function names are as they were then (`findCert` is now `findCerts`).
+§5 gives the answers after the fixes.
+
 | Boundary | Question | Answer |
 |---|---|---|
 | B1 tampering | Is the signature gated before anything is trusted? | **Yes.** `verifySignature` and `cert.Verify` both short-circuit (`cms.go` `verifySigner`). Signed bytes are the received `FullBytes` with only the tag byte swapped (V). |

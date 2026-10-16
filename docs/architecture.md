@@ -45,9 +45,8 @@ signer chain so `Verify` can validate it against the caller's roots.
       appears once with one value.
    2. **Resolve the signer certificate** by `IssuerAndSerialNumber` or, for the
       `[0]` form, a non-empty `SubjectKeyIdentifier`. Every matching bundle
-      certificate, up to four, is tried in order for steps 3 and 4; a certificate whose
-      key-usage extension allows neither `digitalSignature` nor `contentCommitment` is
-      skipped.
+      certificate, up to four, is tried in order for steps 3 and 4; a certificate that
+      lists key usages but neither `digitalSignature` nor `contentCommitment` is skipped.
    3. **Verify the signature over the signed attributes.** The attributes are
       stored `[0] IMPLICIT` but signed as a universal `SET OF`; the tag byte is
       swapped from `0xA0` to `0x31` (IMPLICIT tagging replaces only the tag, so

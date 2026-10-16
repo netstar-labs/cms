@@ -63,8 +63,10 @@ func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOp
 // Digest/chain/signature checks are otherwise identical to Verify.
 func VerifyAsSigned(content, sig []byte, roots *x509.CertPool) ([]*x509.Certificate, error)
 
-// SigningTime returns the signed signingTime attribute (ok=false if absent). The
-// value is trustworthy only once Verify/VerifyAsSigned has succeeded over the sig.
+// SigningTime returns the first signer's signed signingTime attribute (ok=false if
+// absent). The value is trustworthy only once Verify/VerifyAsSigned has succeeded
+// over the sig. It reads with Verify's rules, so it errors on a signature Verify
+// could not read and on signed attributes Verify refuses.
 func SigningTime(sig []byte) (t time.Time, ok bool, err error)
 ```
 
@@ -169,8 +171,9 @@ must verify outside this package — every key type and hash was affected.
 - Treat **any non-nil error** from `Verify` as "not authentic". `errors.Is(err, ErrVerify)`
   additionally says that the signature parsed and had signers and that verification ran and
   failed (the wrapped cause says which check, and with several signers it is the last signer's).
-  It is not set for input that could not be read as a signature this package accepts: a parse
-  error, trailing data, `ErrNotSignedData`, `ErrNoSigners`, more than eight SignerInfos, content
+  A malformed, repeated or multi-valued signed attribute is a signer failure, so it is
+  `ErrVerify`. It is not set for input that could not be read as a signature this package
+  accepts: a ContentInfo, SignedData or SignerInfo that does not parse, trailing data, `ErrNotSignedData`, `ErrNoSigners`, more than eight SignerInfos, content
   that is not `id-data`, a malformed certificate in the bundle, or a nil root pool.
 - `VerifyAsSigned` checks each signer's chain at that signer's own `signingTime` (or its
   certificate's `NotBefore`), read only after that signer's signature has verified, so no other
@@ -181,8 +184,9 @@ must verify outside this package — every key type and hash was affected.
 - The root pool must be **non-nil**: a nil pool is refused, where `x509.VerifyOptions` would
   read it as the operating system's trust store. To trust the system store, pass
   `x509.SystemCertPool()`.
-- A signer certificate whose key-usage extension is present must allow `digitalSignature` or
-  `contentCommitment`. The extended key usage defaults to `ExtKeyUsageAny`, so any certificate
+- A signer certificate that lists key usages must list `digitalSignature` or
+  `contentCommitment`. One without the extension may sign, as RFC 5280 allows, and so may one
+  whose extension sets no bits (RFC 5280 forbids that encoding; Go cannot tell it from absence). The extended key usage defaults to `ExtKeyUsageAny`, so any certificate
   under your roots with a suitable key usage can sign; constrain it through `VerifyWith` (for
   example `ExtKeyUsageCodeSigning`) when the roots issue other kinds.
 - `Verify` returns each verified certificate once, however many SignerInfos it verified under.

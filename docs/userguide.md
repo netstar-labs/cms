@@ -28,7 +28,8 @@ if err != nil {
 - carries signed attributes, with a `messageDigest` equal to `H(content)` and a
   `contentType` of `id-data`,
 - has a signature that verifies over those attributes,
-- and has a certificate that may sign (its key usage, when present, allows it), chains to
+- and has a certificate that may sign (if it lists key usages, one is `digitalSignature` or
+  `contentCommitment`), chains to
   `roots`, and is valid at the supplied time.
 
 A signature with more than eight SignerInfos, trailing data, or content other than `id-data`
