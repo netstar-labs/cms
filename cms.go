@@ -2,7 +2,7 @@
 // (RFC 5652) using only the Go standard library. It is a deliberately small,
 // audited subset — detached SignedData over externally supplied content, with
 // signed attributes — enough to verify vendor-signed artifacts such as IANA's
-// root-anchors.xml/.p7s, signed feeds/RPZ bundles, and refs resources, and to
+// root-anchors.xml/.p7s, signed feeds/RPZ bundles, and data resources, and to
 // produce the same for netstar-labs's own signed data.
 //
 // It does NOT implement encryption, enveloped/authenticated-enveloped data,

@@ -6,8 +6,8 @@ deliberately small, auditable subset: detached SignedData over externally
 supplied content, with signed attributes.
 
 That is exactly what is needed to verify vendor-signed artifacts and to produce
-netstar-labs's own — signed feed/RPZ bundles, `refs` resources, `scribe`
-archives, `core` bundles and patches, and update manifests. The canonical
+netstar-labs's own — signed feed/RPZ bundles, data resources, archives,
+software bundles and patches, and update manifests. The canonical
 example is authenticating IANA's `root-anchors.xml` against its detached
 `.p7s` signature (the RFC 5011 / RFC 9718 DNSSEC trust-anchor bootstrap): a
 common data-signing shape that the Go standard library could not otherwise

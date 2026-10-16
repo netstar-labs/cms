@@ -107,8 +107,8 @@ PEM and parse it. The root's authenticity is then exactly the binary's — no
 separate distribution or verification step, and it works offline / air-gapped.
 Rotate by shipping a new binary when the root changes (rare — e.g. the ICANN Root
 CA is valid to 2029); embed the *next* root alongside the current one for a
-seamless rollover. (This is how `aegis` ships the ICANN Root CA for the DNSSEC
-anchor bootstrap.)
+seamless rollover. (This is the model for shipping the ICANN Root CA for the
+DNSSEC anchor bootstrap.)
 
 ```go
 //go:embed roots/icannbundle.pem

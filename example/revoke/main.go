@@ -50,7 +50,7 @@ func main() {
 	leafCert := issue(leafTmpl, leafKey.Public(), caCert, caKey)
 
 	// --- sign some content with the leaf ------------------------------------
-	content := []byte("core-bundle-2026-07-12.tgz manifest\n")
+	content := []byte("bundle-2026-07-12.tgz manifest\n")
 	sig, err := cms.Sign(content, leafCert, leafKey, cms.SignOptions{SigningTime: now})
 	check(err, "sign")
 
