@@ -27,7 +27,7 @@ impossible with the standard library alone — the concrete gap this package fil
 ## What it enables
 
 - **Signed data across the platform.** Verify — and, via `Sign`, *produce* —
-  signed feed/RPZ bundles, `refs` resources, `scribe` archives, `core` bundles
+  signed feed/RPZ bundles, data resources, archives, software bundles
   and patches, and update manifests, so netstar-labs can sign at the source and
   verify at every consumer (the supply-chain-integrity loop).
 - **Authenticity + expiration.** Because verification checks the signer chain and
