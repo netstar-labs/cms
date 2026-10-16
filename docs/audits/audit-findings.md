@@ -91,7 +91,7 @@ before the fixes, and failed for the reason in the finding; all pass on `2e81a74
 | D-3 | `VerifyAsSigned` anchors each signer at its own signed time, read after its signature verifies; zero time refused | `51b5b9d` | `TestVerifyAsSignedAnchorPerSigner` (the junk-first order verified; the zero time verified) |
 | D-3b | not applicable: inherent to a signer-asserted time; documented | — | — |
 | D-4 | nil root pool refused | `51b5b9d` | `TestNilRootsRefused` (all three entry points went on to the system store) |
-| D-5 | key-usage bit checked (`digitalSignature` or `contentCommitment` when any key usage is listed, the audit's `KeyUsage != 0` rule; an extension with no bits, which RFC 5280 forbids, reads as absent); `ExtKeyUsageAny` default kept and documented | `51b5b9d` | `TestSignerKeyUsage` (keyEncipherment-only and certSign-only certificates signed) |
+| D-5 | key-usage bit checked (`digitalSignature` or `contentCommitment` when any key usage is listed, the audit's `KeyUsage != 0` rule, extended by SK-4 to an extension with no bits `x509` names, which is refused); `ExtKeyUsageAny` default kept and documented | `51b5b9d` | `TestSignerKeyUsage` (keyEncipherment-only and certSign-only certificates signed) |
 | D-6 | each verified certificate returned once | `51b5b9d` | `TestRepeatedSignerReportedOnce` (3 copies returned 3 certificates) |
 | D-7 | context-tagged CertificateChoices skipped | `51b5b9d` | `TestBundleSkipsOtherCertificateChoices` ([1]–[3] elements failed the parse) |
 | D-8 | up to 4 matching certificates tried in order; empty SKI matches nothing | `51b5b9d` | `TestSignerCandidates` (expired-first rejected; empty SKI matched) |
@@ -116,7 +116,7 @@ and what was done:
 | SK-4 | LOW | A key-usage extension with no bits, or only bit 9, parses as `KeyUsage == 0` and passed the D-5 check. | **Fixed**: the extension's presence is checked as well as the bits. `TestSignerKeyUsage`, mutation-checked. |
 | SK-5 | LOW | DER malleability beyond D-10: trailing elements inside the ContentInfo, SignedData and SignerInfo sequences, a primitive retag of the signed attributes, attribute values that are not a SET, unsorted attribute SETs. Not a forgery. | Documented precisely in the README (the earlier "trailing data rejected" overstated); left, like D-10's remainder. |
 | SK-6 | LOW | The `ErrVerify` contract did not list the unsupported-digest, unreadable-SID and chain-cap cases (all `ErrVerify`). | **Fixed** in the doc comment and README. |
-| SK-7 | LOW | A signed-attribute set of many tiny unknown attributes allocates about 13 B per input byte (16 MB → 208 MB). Pre-existing, linear. | Documented; left. |
+| SK-7 | LOW | A signed-attribute set of many tiny unknown attributes allocates about 13 B per input byte (16 MB → 208 MB); the claims skeptic measured up to 17 B per byte with one-byte OIDs. Pre-existing, linear. | Documented; left. |
 | SK-8 | INFO | A legitimate signer behind four same-identifier certificates in one bundle is not tried. | Documented. |
 | — | INFO | LibreSSL's `cms -resign` writes the added signer without a contentType attribute, which `Verify` refuses (as v0.1.2 did). | Recorded; RFC 5652 §11.1 requires the attribute. |
 

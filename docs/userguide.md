@@ -37,7 +37,8 @@ A signature with more than eight SignerInfos, more than 32 bundle certificates, 
 verified signing key is returned once.
 
 When the signature parsed, carried signers and none verified, the error satisfies
-`errors.Is(err, cms.ErrVerify)` and wraps the specific cause. Unreadable input (a parse error,
+`errors.Is(err, cms.ErrVerify)` and wraps the specific cause; a malformed signed attribute counts
+as a signer failure. Unreadable input (a ContentInfo, SignedData or SignerInfo that does not parse,
 `ErrNotSignedData`, `ErrNoSigners`, a malformed certificate in the bundle, a nil root pool)
 does not match it; any non-nil error still means the signature is not authentic. A nil `roots`
 pool is refused; pass `x509.SystemCertPool()` to trust the operating system's store.

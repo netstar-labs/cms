@@ -65,8 +65,8 @@ func VerifyAsSigned(content, sig []byte, roots *x509.CertPool) ([]*x509.Certific
 
 // SigningTime returns the first signer's signed signingTime attribute (ok=false if
 // absent). The value is trustworthy only once Verify/VerifyAsSigned has succeeded
-// over the sig. It reads with Verify's rules, so it errors on a signature Verify
-// could not read and on signed attributes Verify refuses.
+// over the sig. It reads the first signer with Verify's rules, so it errors on
+// signed attributes Verify refuses; it does not parse the certificate bundle.
 func SigningTime(sig []byte) (t time.Time, ok bool, err error)
 ```
 
@@ -189,8 +189,9 @@ must verify outside this package — every key type and hash was affected.
   read it as the operating system's trust store. To trust the system store, pass
   `x509.SystemCertPool()`.
 - A signer certificate that lists key usages must list `digitalSignature` or
-  `contentCommitment`. One without the extension may sign, as RFC 5280 allows, and so may one
-  whose extension sets no bits (RFC 5280 forbids that encoding; Go cannot tell it from absence). The extended key usage defaults to `ExtKeyUsageAny`, so any certificate
+  `contentCommitment`. One without the extension may sign, as RFC 5280 allows; one whose
+  extension sets no bit, or none that `x509` names, may not. The extended key usage defaults to
+  `ExtKeyUsageAny`, so any certificate
   under your roots with a suitable key usage can sign; constrain it through `VerifyWith` (for
   example `ExtKeyUsageCodeSigning`) when the roots issue other kinds.
 - `Verify` returns each verified signing key once (the first certificate it verified under),
@@ -204,7 +205,8 @@ must verify outside this package — every key type and hash was affected.
   signers, 0.28 s (with P-521 decoys, 0.23 s); eight signers × four 8192-bit candidates, 66 ms.
   Before the bundle limits, oversized RSA keys made a 920 KB signature cost 71 s. A deadline is
   still sensible for untrusted input at volume. Memory is linear in the signature's size: a
-  signed-attribute set of many tiny unknown attributes allocates about 13 bytes per input byte.
+  signed-attribute set of many tiny unknown attributes allocates up to about 17 bytes per input
+  byte (measured 12.7–17.0, depending on the attributes' OID length).
 - A legitimate signer whose identifier matches five or more certificates in one bundle (for
   example, repeated renewals under one issuer and serial) is checked against only the first
   four.

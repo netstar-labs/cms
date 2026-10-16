@@ -222,9 +222,10 @@ func verifyWith(st *verifyState, sig []byte, opts x509.VerifyOptions, asSigned b
 // SigningTime returns the signed signingTime attribute of sig's first signer, or
 // ok=false when the signature carries none. It parses without verifying, so the
 // value is trustworthy only once Verify/VerifyWith/VerifyAsSigned has succeeded
-// over the same signature and content. It reads with Verify's rules, so it returns
-// an error for a signature Verify could not read and for signed attributes Verify
-// refuses (contentType or messageDigest missing, an attribute repeated or multi-valued).
+// over the same signature and content. It reads the first signer with Verify's
+// rules, so it returns an error for signed attributes Verify refuses (contentType or
+// messageDigest missing, an attribute repeated or multi-valued); it does not parse
+// the certificate bundle, so it does not apply the bundle limits.
 func SigningTime(sig []byte) (t time.Time, ok bool, err error) {
 	_, si, err := parseFirstSigner(sig)
 	if err != nil {

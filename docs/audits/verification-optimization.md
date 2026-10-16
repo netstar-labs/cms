@@ -63,7 +63,7 @@ about 7–12% of `Verify` (4.5 µs of 35–65 µs). The `VerifyAsSigned` double 
 
 ## 6. Success metrics
 
-Statement coverage 80.3% → 88.6% → 92.8%; fuzz targets 0 → 1; benchmarks 0 → 4 families; confirmed doc drifts 10 → 0 open; panics reachable
+Statement coverage 80.3% → 88.6% → 93.0%; fuzz targets 0 → 1; benchmarks 0 → 4 families; confirmed doc drifts 10 → 0 open; panics reachable
 from `Sign` caller input 5 → 0; repeated-signer verification cost linear → near-constant for signed-attribute signers.
 
 ## Self-check
