@@ -31,6 +31,7 @@ status: covered / partial / uncovered.
 | `TestHashMatrix` | RSA/ECDSA with SHA-256/384/512; refusals; Ed25519 SHA-512 only | coverage |
 | `TestNoSignedAttributes` | pinned the attribute-less behaviour pending D-1; **removed** when D-1 was fixed (`51b5b9d`) | characterization |
 | `hardening_test.go` (14 tests) | one per owner-approved fix, D-1 to D-14, plus `TestCandidateLimit`: see the [disposition table](audit-findings.md#dispositions) | yes: 13 red against `9be6a7c`; D-9, `TestCandidateLimit` and the D-14 attribute case by mutation |
+| `TestBundleLimits`; extra cases in `TestSignerKeyUsage` and `TestRepeatedSignerReportedOnce` | SK-1 bundle and RSA caps; SK-4 key-usage extension with no known bits; SK-3 one result per key | mutation-checked: each goes red when its rule is reverted |
 | `TestSentinelErrors` | `ErrNotSignedData` and `ErrNoSigners` are returned and matchable | coverage (they had no test) |
 | `TestSubjectKeyIdentifierSID`, `TestMultipleSigners` | SKI-form signer; one-good-signer-is-enough in either order with one hash per algorithm and one chain per certificate; none-valid is `ErrVerify` | mutation-checked: digest cache keyed by a constant |
 | `TestConcurrentSignVerify` | no shared mutable state | `-race` |

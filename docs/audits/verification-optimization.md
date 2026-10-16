@@ -44,7 +44,7 @@ verification; nothing needed optimizing except a per-signer rehash that was a de
 | Concurrency | No mutable package state; the package-level OID slices are read-only; `-race` clean. |
 | Resource limits | Verification cost scales with the number of SignerInfos and distinct signer certificates and was **not** bounded by `len(sig)` (D-2b, D-2c); since `51b5b9d` it is capped at 8 SignerInfos, 4 candidates per signer and 8 chain builds. The content is not copied (7.5 KB/op flat from 1 KiB to 64 MiB). |
 | Integer conversions | `tlvHeader` (since replaced by `setOf`, `9be6a7c`) long-form lengths checked at and above 0x80 (the SHA-512 attribute set crosses it; OpenSSL 3.5.0 accepts it). No attacker-sized conversions found. |
-| Denial of service | D-2 (b, c), see the security review. Closed by the caps in `51b5b9d` (`TestSignerLimit`, `TestCandidateLimit`, `TestChainBudget`). |
+| Denial of service | D-2 (b, c), see the security review. Capped in `51b5b9d`; a skeptic then showed oversized RSA keys in the bundle bypassed the caps (SK-1, 71.5 s), closed by the bundle and RSA-size limits (worst case measured at 0.28 s). |
 
 ## 4. Performance
 

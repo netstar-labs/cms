@@ -36,7 +36,7 @@ signer chain so `Verify` can validate it against the caller's roots.
 2. Parse `SignedData` with no trailing data; require the encapsulated content type to be
    `id-data`; decode the SignerInfos one at a time, refusing a ninth; extract the
    certificate set (`x509.ParseCertificate`, skipping context-tagged CertificateChoices
-   such as attribute certificates).
+   such as attribute certificates), refusing a 33rd element or an RSA key over 8192 bits.
 3. For each `SignerInfo` (the content is hashed once per digest algorithm, and each
    (certificate, time) chain is built once, at most eight per call):
    1. **Check the signed attributes**, which are required (RFC 5652 §5.4): the
@@ -58,7 +58,7 @@ signer chain so `Verify` can validate it against the caller's roots.
       `VerifyWith` lets the caller control roots, intermediates, key usages, and
       time. Certificates carried in the SignedData are added as intermediates
       when the caller supplies none, so leaf→intermediate→root chains verify.
-4. Succeed if any signer verifies; return the verified certificates, each once.
+4. Succeed if any signer verifies; return the verified certificates, one per signing key.
    Revocation is a caller step on the returned certificate (see the trade-off table).
 
 `VerifyAsSigned` is the same flow with each signer's chain clock set to that signer's own
@@ -90,7 +90,7 @@ signs the `SET OF` itself, with SHA-512 as the digest algorithm), and assemble
 | Signed-attrs re-encoding | Swap `0xA0`→`0x31` on the captured bytes | The exact bytes the signer hashed; avoids re-marshal drift |
 | SET OF ordering (Sign) | Sort attribute encodings before concatenating | DER `SET OF` requires sorted elements (interop) |
 | Signature algorithm | Verify: chosen from the signer's public-key type, digest from `digestAlgorithm`. Sign: writes `rsaEncryption` + NULL, `ecdsa-with-SHA*`, or `id-Ed25519` | Matches how CMS separates digest and signature algorithms; the written identifiers are what RFC 3370, 5753 and 8419 name and what OpenSSL writes |
-| Work limits | 8 SignerInfos, 4 candidate certificates per signer, 8 chain builds per call | A hostile signature cannot buy CPU or memory in proportion to its size |
+| Work limits | 8 SignerInfos, 32 bundle certificates, RSA keys up to 8192 bits, 4 candidate certificates per signer, 8 chain builds per call | A hostile signature cannot buy CPU or memory in proportion to its size; measured worst case about 0.3 s |
 | Ed25519 digest | SHA-512 only, in `Sign` and `Verify` | RFC 8419 §3.1 fixes it; accepting another would let a weaker `messageDigest` stand behind an Ed25519 signature |
 | Revocation | Not checked; a caller step on the returned signer cert (CRL/OCSP) | Go's `x509.VerifyOptions` has no revocation facility, and revocation policy is caller territory — keeps the package focused (see README §Revocation, `example/revoke`) |
 | Content in memory | `[]byte` content and signature | Root-anchors and manifests are small; streaming is unneeded |
