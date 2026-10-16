@@ -457,7 +457,7 @@ type signedAttrs struct {
 // (RFC 5652 §5.3). RFC 5652 §11 allows each of the three once, with exactly one value.
 func parseSignedAttrs(raw asn1.RawValue) (signedAttrs, error) {
 	var out signedAttrs
-	seen := map[string]bool{}
+	var seen [3]bool // messageDigest, contentType, signingTime
 	for rest := raw.Bytes; len(rest) > 0; {
 		var a attribute
 		var err error
@@ -465,20 +465,21 @@ func parseSignedAttrs(raw asn1.RawValue) (signedAttrs, error) {
 			return signedAttrs{}, fmt.Errorf("cms: parse signed attribute: %w", err)
 		}
 		var v any
+		var i int
 		switch {
 		case a.Type.Equal(oidMessageDigest):
-			v = &out.messageDigest
+			v, i = &out.messageDigest, 0
 		case a.Type.Equal(oidContentType):
-			v = &out.contentType
+			v, i = &out.contentType, 1
 		case a.Type.Equal(oidSigningTime):
-			v, out.hasSigningTime = &out.signingTime, true
+			v, i, out.hasSigningTime = &out.signingTime, 2, true
 		default:
 			continue
 		}
-		if seen[a.Type.String()] {
+		if seen[i] {
 			return signedAttrs{}, fmt.Errorf("cms: signed attribute %v appears twice", a.Type)
 		}
-		seen[a.Type.String()] = true
+		seen[i] = true
 		extra, err := asn1.Unmarshal(a.Values.Bytes, v)
 		if err != nil {
 			return signedAttrs{}, fmt.Errorf("cms: signed attribute %v value: %w", a.Type, err)
