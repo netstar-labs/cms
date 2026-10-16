@@ -389,3 +389,36 @@ func TestOnlyIDData(t *testing.T) {
 		t.Errorf("id-ct-TSTInfo content: err = %v, want a refusal that is not ErrVerify", err)
 	}
 }
+
+// D-9: Sign's signatureAlgorithm is the one RFC 3370, RFC 5753 and RFC 8419 name, matching what
+// OpenSSL writes: rsaEncryption with NULL parameters, ecdsa-with-SHA* and id-Ed25519 without.
+func TestSignatureAlgorithmEncoding(t *testing.T) {
+	null := []byte{0x05, 0x00}
+	want := map[string]map[crypto.Hash]struct {
+		oid    asn1.ObjectIdentifier
+		params []byte
+	}{
+		"rsa":     {crypto.SHA256: {oidRSAEncryption, null}, crypto.SHA384: {oidRSAEncryption, null}, crypto.SHA512: {oidRSAEncryption, null}},
+		"ecdsa":   {crypto.SHA256: {oidECDSAWithSHA256, nil}, crypto.SHA384: {oidECDSAWithSHA384, nil}, crypto.SHA512: {oidECDSAWithSHA512, nil}},
+		"ed25519": {crypto.SHA512: {oidEd25519, nil}},
+	}
+	for name, key := range allKeys(t) {
+		cert, roots := selfSigned(t, key)
+		for h, w := range want[name] {
+			sig, err := Sign([]byte("x"), cert, key, SignOptions{Hash: h})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, si, err := parseFirstSigner(sig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := si.SignatureAlgorithm; !got.Algorithm.Equal(w.oid) || !bytes.Equal(got.Parameters.FullBytes, w.params) {
+				t.Errorf("%s/%v: signatureAlgorithm %v %x, want %v %x", name, h, got.Algorithm, got.Parameters.FullBytes, w.oid, w.params)
+			}
+			if _, err := Verify([]byte("x"), sig, roots, time.Now()); err != nil {
+				t.Errorf("%s/%v: %v", name, h, err)
+			}
+		}
+	}
+}
