@@ -32,7 +32,7 @@ if err != nil {
   `contentCommitment`), chains to
   `roots`, and is valid at the supplied time.
 
-A signature with more than eight SignerInfos, more than 32 bundle certificates, an RSA key over
+A signature with more than eight SignerInfos, more than 32 bundle elements, an RSA key over
 8192 bits in the bundle, trailing data, or content other than `id-data` is refused. Each
 verified signing key is returned once.
 
