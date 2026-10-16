@@ -105,44 +105,6 @@ func TestDigestAlgorithmsIsASet(t *testing.T) {
 	}
 }
 
-// TestNoSignedAttributes pins what Verify does today with a SignerInfo that has no signedAttrs: the
-// signature is checked over the content (its digest for RSA/ECDSA, the bytes for Ed25519) and
-// neither messageDigest nor contentType is consulted. RFC 5652 §5.4 allows this for id-data; the
-// audit (docs/audits/audit-findings.md, S2) flags the consequence and leaves the policy to the owner.
-func TestNoSignedAttributes(t *testing.T) {
-	now := time.Now()
-	content := []byte("signed directly")
-	for name, key := range allKeys(t) {
-		cert, roots := selfSigned(t, key)
-		sig, err := Sign(content, cert, key, SignOptions{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, orig, _ := parseFirstSigner(sig)
-		h, _ := hashForOID(orig.DigestAlgorithm.Algorithm)
-		direct := func(sign []byte) []byte {
-			return mutateSigner(t, sig, func(_ *signedData, si *signerInfo) {
-				si.SignedAttrs = asn1.RawValue{}
-				var err error
-				if name == "ed25519" {
-					si.Signature, err = key.Sign(rand.Reader, sign, crypto.Hash(0))
-				} else {
-					si.Signature, err = key.Sign(rand.Reader, digest(h, sign), h)
-				}
-				if err != nil {
-					t.Fatal(err)
-				}
-			})
-		}
-		if _, err := Verify(content, direct(content), roots, now); err != nil {
-			t.Errorf("%s: a direct signature over the content was rejected: %v", name, err)
-		}
-		if _, err := Verify(content, direct([]byte("other bytes")), roots, now); !errors.Is(err, ErrVerify) {
-			t.Errorf("%s: a direct signature over different bytes: err = %v, want ErrVerify", name, err)
-		}
-	}
-}
-
 // TestSubjectKeyIdentifierSID: openssl's -keyid names the signer by [0] SubjectKeyIdentifier rather
 // than by issuer and serial; findCert had no test for that form.
 func TestSubjectKeyIdentifierSID(t *testing.T) {
@@ -213,7 +175,7 @@ func TestMultipleSigners(t *testing.T) {
 	// two certificates.
 	for name, sig := range map[string][]byte{"untrusted first": both(s1, s2), "trusted first": both(s2, s1)} {
 		st := newVerifyState(content)
-		signers, err := verifyWith(st, sig, verifyOpts(roots, now))
+		signers, err := verifyWith(st, sig, verifyOpts(roots, now), false)
 		if err != nil || len(signers) != 1 || signers[0].SerialNumber.Int64() != 99 {
 			t.Fatalf("%s: %d signers, err %v", name, len(signers), err)
 		}

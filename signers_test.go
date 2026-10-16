@@ -31,10 +31,25 @@ func withSigners(t testing.TB, sig []byte, n int) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _, _ := parseFirstSigner(out); len(got.SignerInfos) != n {
-		t.Fatalf("built %d SignerInfos, want %d", len(got.SignerInfos), n)
+	var shape signedDataShape
+	if _, err := asn1.Unmarshal(ci.Content.Bytes, &shape); err != nil {
+		t.Fatal(err)
+	}
+	if got := countElements(t, shape.SignerInfos.Bytes); got != n {
+		t.Fatalf("built %d SignerInfos, want %d", got, n)
 	}
 	return out
+}
+
+func countElements(t testing.TB, b []byte) (n int) {
+	for ; len(b) > 0; n++ {
+		var v asn1.RawValue
+		var err error
+		if b, err = asn1.Unmarshal(b, &v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return n
 }
 
 // verifyOpts are the options Verify builds, for tests that drive verifyWith directly.
@@ -56,10 +71,10 @@ func TestManySignersBoundedWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, n := range []int{1, 2, 64} {
+	for _, n := range []int{1, 2, maxSigners} {
 		st := newVerifyState(content)
-		signers, err := verifyWith(st, withSigners(t, sig, n), verifyOpts(roots, now))
-		if err != nil || len(signers) == 0 {
+		signers, err := verifyWith(st, withSigners(t, sig, n), verifyOpts(roots, now), false)
+		if err != nil || len(signers) != 1 {
 			t.Fatalf("n=%d: %d signers, err %v", n, len(signers), err)
 		}
 		if st.hashed != 1 || st.chained != 1 {
@@ -90,9 +105,9 @@ func TestRepeatedBadSignerRejected(t *testing.T) {
 		"untrusted root": {untrusting, now},
 		"expired":        {roots, now.Add(72 * time.Hour)},
 	} {
-		for _, n := range []int{1, 2, 3, 16} {
+		for _, n := range []int{1, 2, 3, maxSigners} {
 			st := newVerifyState(content)
-			signers, err := verifyWith(st, withSigners(t, sig, n), verifyOpts(c.roots, c.at))
+			signers, err := verifyWith(st, withSigners(t, sig, n), verifyOpts(c.roots, c.at), false)
 			if err == nil || len(signers) != 0 || !errors.Is(err, ErrVerify) {
 				t.Errorf("%s, %d copies: %d signers accepted, err %v; want rejection with ErrVerify", name, n, len(signers), err)
 			}
