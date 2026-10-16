@@ -120,6 +120,13 @@ and what was done:
 | SK-8 | INFO | A legitimate signer behind four same-identifier certificates in one bundle is not tried. | Documented. |
 | — | INFO | LibreSSL's `cms -resign` writes the added signer without a contentType attribute, which `Verify` refuses (as v0.1.2 did). | Recorded; RFC 5652 §11.1 requires the attribute. |
 
+**Sign-off.** A fresh reviewer signed off on the limits at `55761e8`: regressions none (the LibreSSL fixtures, fresh `openssl cms
+-sign` output including `-keyid` and two signers, all 16 v0.1.2 RSA/ECDSA signatures); every limit enforced at its boundary
+(context-tagged elements count toward the 32; 8192-bit RSA accepted, 8193 refused, at e = 65537 and 2^31−1); worst cases re-measured
+at 0.27 s (8192-bit decoys), 0.22 s (P-521) and 46–52 ms (8 × 4 candidates), nothing within the limits above 0.3 s. The claims
+skeptic signed off on the documentation at `b05d41b` after two rounds. The first security skeptic's own sign-off pass was halted
+before it ran anything and is not counted.
+
 The claims skeptic found six wrong or unpinned claims; they were fixed in `76ce398` (two unpinned checks now tested, an order loop
 that tested one order twice, the coverage and allocation figures, the key-usage wording, and stale ledger text).
 

@@ -178,7 +178,7 @@ must verify outside this package — every key type and hash was affected.
   be read as a signature this package accepts: a ContentInfo, SignedData or SignerInfo that does
   not parse, trailing data, `ErrNotSignedData`, `ErrNoSigners`, more than eight SignerInfos,
   content that is not `id-data`, a malformed certificate in the bundle, more than 32
-  certificates in it or an RSA key over 8192 bits, or a nil root pool.
+  elements in it or an RSA key over 8192 bits, or a nil root pool.
 - `VerifyAsSigned` checks each signer's chain at that signer's own `signingTime` (or its
   certificate's `NotBefore`), read only after that signer's signature has verified, so no other
   SignerInfo can move it. A zero time is refused. The time is still the signer's claim, not a
@@ -191,14 +191,14 @@ must verify outside this package — every key type and hash was affected.
 - A signer certificate that lists key usages must list `digitalSignature` or
   `contentCommitment`. One without the extension may sign, as RFC 5280 allows; one whose
   extension sets no bit, or none that `x509` names, may not. The extended key usage defaults to
-  `ExtKeyUsageAny`, so any certificate
-  under your roots with a suitable key usage can sign; constrain it through `VerifyWith` (for
-  example `ExtKeyUsageCodeSigning`) when the roots issue other kinds.
+  `ExtKeyUsageAny`, so any certificate under your roots with a suitable key usage can sign;
+  constrain it through `VerifyWith` (for example `ExtKeyUsageCodeSigning`) when the roots issue
+  other kinds.
 - `Verify` returns each verified signing key once (the first certificate it verified under),
   however many SignerInfos or certificates name it, so an M-of-N policy can count the result.
-- **Work per signature is capped.** The bundle may hold at most 32 certificates, and none with
-  an RSA key over 8192 bits (`crypto/tls`'s limit, for the same reason: RSA verification cost
-  grows with the square of the modulus). At most eight SignerInfos, refused before they are
+- **Work per signature is capped.** The bundle may hold at most 32 elements (certificates and
+  other CertificateChoices), and no RSA key over 8192 bits (`crypto/tls`'s limit, for the same
+  reason: RSA verification cost grows with the square of the modulus). At most eight SignerInfos, refused before they are
   decoded; at most four bundle certificates tried per signer identifier; at most eight distinct
   chain builds per call; the content is hashed once per digest algorithm. Measured worst cases
   on an Apple M2 Pro: a full bundle of decoy intermediates with 8192-bit RSA keys and eight

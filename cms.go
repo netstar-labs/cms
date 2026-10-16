@@ -62,7 +62,7 @@ var (
 	// It is NOT returned for input that could not be read as a signature this package accepts: a
 	// ContentInfo, SignedData or SignerInfo that does not parse, trailing data, ErrNotSignedData,
 	// ErrNoSigners, more than eight SignerInfos, an encapsulated content type other than id-data,
-	// a malformed certificate in the (attacker-chosen) bundle, more than 32 certificates in it or
+	// a malformed certificate in the (attacker-chosen) bundle, more than 32 elements in it or
 	// an RSA key over 8192 bits, or a nil root pool. Whatever the error, non-nil means the
 	// signature is not authentic; use ErrVerify only to tell "verification ran and failed" from
 	// "could not read the signature".
