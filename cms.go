@@ -38,9 +38,11 @@ var (
 	oidSHA384 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 2}
 	oidSHA512 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 3}
 
-	oidRSAEncryption = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
-	oidECPublicKey   = asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 1}
-	oidEd25519       = asn1.ObjectIdentifier{1, 3, 101, 112} // RFC 8410; its CMS use is RFC 8419
+	oidRSAEncryption   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+	oidECDSAWithSHA256 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 2}
+	oidECDSAWithSHA384 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 3}
+	oidECDSAWithSHA512 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 4}
+	oidEd25519         = asn1.ObjectIdentifier{1, 3, 101, 112} // RFC 8410; its CMS use is RFC 8419
 )
 
 var (
@@ -654,7 +656,7 @@ func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOp
 		SID:                sidFromCert(cert),
 		DigestAlgorithm:    pkix.AlgorithmIdentifier{Algorithm: digOID},
 		SignedAttrs:        asn1.RawValue{FullBytes: implicitTag(signedAttrsDER)},
-		SignatureAlgorithm: pkix.AlgorithmIdentifier{Algorithm: sigOIDForKey(key)},
+		SignatureAlgorithm: sigAlgFor(key, h),
 		Signature:          sig,
 	}
 
@@ -712,14 +714,24 @@ func sidFromCert(cert *x509.Certificate) asn1.RawValue {
 	return asn1.RawValue{FullBytes: b}
 }
 
-func sigOIDForKey(key crypto.Signer) asn1.ObjectIdentifier {
+// sigAlgFor is the signatureAlgorithm for key signing with h: rsaEncryption with NULL parameters
+// (RFC 3370 §3.2), ecdsa-with-SHA* without parameters (RFC 5753 §2.1.1), id-Ed25519 without
+// parameters (RFC 8419 §3.1). These are what OpenSSL writes.
+func sigAlgFor(key crypto.Signer, h crypto.Hash) pkix.AlgorithmIdentifier {
 	switch key.Public().(type) {
 	case *ecdsa.PublicKey:
-		return oidECPublicKey
+		oid := oidECDSAWithSHA256 // Sign has already refused hashes other than SHA-256/384/512
+		switch h {
+		case crypto.SHA384:
+			oid = oidECDSAWithSHA384
+		case crypto.SHA512:
+			oid = oidECDSAWithSHA512
+		}
+		return pkix.AlgorithmIdentifier{Algorithm: oid}
 	case ed25519.PublicKey:
-		return oidEd25519
+		return pkix.AlgorithmIdentifier{Algorithm: oidEd25519}
 	default:
-		return oidRSAEncryption
+		return pkix.AlgorithmIdentifier{Algorithm: oidRSAEncryption, Parameters: asn1.NullRawValue}
 	}
 }
 
