@@ -51,16 +51,17 @@ B1/B2 input; B3 the trust anchor (the caller's); B4 `VerifyOptions` passed throu
 
 | Rank | ID | One line | Status |
 |---|---|---|---|
-| HIGH | D-2 (b, c) | CPU DoS from a small signature: Ed25519 without attributes; distinct signer certificates × decoy intermediates | repeated-signer case fixed (F-3); cap = decision |
-| HIGH | D-3 / D-3b | `VerifyAsSigned` anchor from an unverified first signer; key-holder backdating | decision / documented |
-| MED | D-1 | attribute-less signers accepted; attribute-strip | decision |
-| MED | D-4 | nil roots → OS trust store | decision; documented |
-| MED | D-5 | any cert under the root can sign (`ExtKeyUsageAny`) | decision; documented |
-| MED | D-6 | duplicate signer certificates returned | decision; documented |
-| LOW | D-7…D-12, D-14 | non-X.509 cert choices; SKI selection; sigAlg OIDs; trailing data; duplicate attributes; typed-nil; contentType not required to be id-data | see ledger |
+| HIGH | D-2 (b, c) | CPU DoS from a small signature: Ed25519 without attributes; distinct signer certificates × decoy intermediates | **fixed**: F-3, D-1, caps of 8 SignerInfos / 4 candidates / 8 chain builds |
+| HIGH | D-3 / D-3b | `VerifyAsSigned` anchor from an unverified first signer; key-holder backdating | D-3 **fixed** (per-signer anchor after verification); D-3b documented, inherent |
+| MED | D-1 | attribute-less signers accepted; attribute-strip | **fixed**: signed attributes required |
+| MED | D-4 | nil roots → OS trust store | **fixed**: refused |
+| MED | D-5 | any cert under the root can sign (`ExtKeyUsageAny`) | **fixed** for the key-usage bit; EKU default kept, documented |
+| MED | D-6 | duplicate signer certificates returned | **fixed** |
+| LOW | D-7…D-12, D-14 | non-X.509 cert choices; SKI selection; sigAlg OIDs; trailing data; duplicate attributes; typed-nil; contentType not required to be id-data | **fixed** except D-12 (recorded limit) and D-10's `SET OF` order / unsigned fields |
 
-**Confirm scope before applying any of D-1 to D-11 and D-14**: each narrows or widens what `Verify` accepts or changes the bytes `Sign`
-writes (A3 §5). None has been applied.
+**Scope was confirmed by the owner on 2026-10-16** and the recommended option for each of D-1 to D-11 and D-14 was applied
+(`51b5b9d`, `2e81a74`, `0aff25a`); see §5 for the boundary answers after the fixes and the
+[disposition table](audit-findings.md#dispositions) for each test.
 
 ## 3. Checked and clean
 
@@ -72,3 +73,15 @@ for PureEdDSA; the signed-attribute set is DER-sorted and retagged `[0] IMPLICIT
 
 Ed25519 interop was run on OpenSSL 3.5.0 and 3.0.15 only. D-4's wrong accept is unreproduced. The CPU figures at 1 MB of signature
 are extrapolated from measured linear scaling.
+
+## 5. After the owner-approved fixes (`2e81a74`, `0aff25a`)
+
+| Boundary | Answer now |
+|---|---|
+| B1/B2 DoS | Bounded: at most 8 SignerInfos (decoded one at a time, so a 40,000-signer signature is refused without allocating it, V `TestSignerLimit`), 4 candidate certificates per signer, 8 distinct chain builds per call (V `TestChainBudget`). With the audit's ~110 ms per hostile chain build, the chain-build worst case is about 0.9 s (I, from that measurement). Attribute-less Ed25519 is gone with D-1. |
+| B1 malleability | Trailing data refused (V). Non-DER `SET OF` order and unsigned fields still tolerated: not a forgery. |
+| B1 attribute handling | Signed attributes required; contentType, messageDigest, signingTime once each with one value; id-data only (V). |
+| B1 signer selection | Every matching certificate, up to 4, is tried; an empty SKI matches nothing (V). |
+| B3 trust anchor | A nil pool is refused (V). |
+| B4 policy | A certificate whose key usage is present must allow signing (V); the EKU default stays `ExtKeyUsageAny` (documented). |
+| B5 clock | `VerifyAsSigned` anchors each signer at its own signed time, read after its signature verifies; a prepended SignerInfo cannot move it; zero time refused (V `TestVerifyAsSignedAnchorPerSigner`). D-3b unchanged and inherent. |

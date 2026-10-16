@@ -43,6 +43,7 @@ Sign(content, cert, key, opts) ─▶ detached SignedData DER  (opts.SigningTime
 ```go
 // Verify checks that sig (DER, detached CMS SignedData) authenticates content:
 // some signer must verify over the content, chain to roots, and be valid at now.
+// roots must not be nil.
 func Verify(content, sig []byte, roots *x509.CertPool, now time.Time) ([]*x509.Certificate, error)
 
 // VerifyWith is Verify with caller-controlled chain verification. Certificates
@@ -56,10 +57,10 @@ func VerifyWith(content, sig []byte, opts x509.VerifyOptions) ([]*x509.Certifica
 // Ed25519 key signs by RFC 8419: SHA-512 digest, PureEdDSA over the attributes.
 func Sign(content []byte, cert *x509.Certificate, key crypto.Signer, opts SignOptions) ([]byte, error)
 
-// VerifyAsSigned is Verify anchored to the signed signingTime (or the signer's
-// NotBefore when absent) instead of the wall clock, so a write-once resource stays
-// verifiable after a short signing leaf has expired. Digest/chain/signature checks
-// are otherwise identical to Verify.
+// VerifyAsSigned is Verify with each signer's chain checked at that signer's own
+// signed signingTime (or its NotBefore when absent) instead of the wall clock, so a
+// write-once resource stays verifiable after a short signing leaf has expired.
+// Digest/chain/signature checks are otherwise identical to Verify.
 func VerifyAsSigned(content, sig []byte, roots *x509.CertPool) ([]*x509.Certificate, error)
 
 // SigningTime returns the signed signingTime attribute (ok=false if absent). The
@@ -79,7 +80,8 @@ func SigningTime(sig []byte) (t time.Time, ok bool, err error)
 | `sign_input_test.go` | `Sign` returns errors, not panics, and refuses a certificate that is not the key's |
 | `signers_test.go` | repeated SignerInfos cost one hash and one chain build; a repeated bad signer stays rejected (work is counted, not timed) |
 | `errverify_test.go` | the `ErrVerify` contract across key types, and what is not `ErrVerify` |
-| `coverage_test.go` | hash matrix, the `digestAlgorithms` SET form, attribute-less signers, SKI signer ids, several signers |
+| `coverage_test.go` | hash matrix, the `digestAlgorithms` SET form, SKI signer ids, several signers |
+| `hardening_test.go` | one test per audit fix D-1 to D-14: required signed attributes, signer and chain caps, per-signer `VerifyAsSigned` time, nil roots, key usage, trailing data, repeated attributes, id-data only, `signatureAlgorithm` encoding |
 | `fuzz_test.go` | `FuzzVerify` and the `Sign` / `Verify` / hostile-input benchmarks |
 | `concurrent_test.go` | `Sign` and `Verify` from many goroutines over one root pool, clean under `-race` |
 
@@ -103,12 +105,11 @@ RFC 8419 (EdDSA in CMS) with RFC 8410 (Ed25519 identifiers),
 RFC 5280 (X.509 path validation, via `crypto/x509`). Consumers: RFC 9718 / RFC
 5011 (IANA root-anchors.xml distribution and trust-anchor updates).
 
-Known deviation: for RSA and ECDSA, `Sign` writes `rsaEncryption` without the NULL
-parameters RFC 3370 §3.2 requires, and `id-ecPublicKey` where RFC 5753 §2.1.1 calls for
-`ecdsa-with-SHA256/384/512` as the `signatureAlgorithm`. OpenSSL 3.5.0, OpenSSL 3.0.15 and
-LibreSSL 3.3.6 accept the output anyway, and `Verify` never reads that field (the
-certificate's key type decides). The Ed25519 identifiers follow RFC 8419 §3.1. See
-`docs/audits/audit-findings.md` (C3).
+`Sign` writes the `signatureAlgorithm` these RFCs name, as `openssl cms -sign` does:
+`rsaEncryption` with NULL parameters (RFC 3370 §3.2), `ecdsa-with-SHA256/384/512` (RFC 5753
+§2.1.1) and `id-Ed25519` (RFC 8419 §3.1). Releases up to v0.1.2 wrote `rsaEncryption` without
+parameters and `id-ecPublicKey`; `Verify` never reads the field (the certificate's key type
+decides), so such signatures still verify here.
 
 ## Testing & interoperability
 
@@ -137,9 +138,8 @@ Verified so far (each run, with `-race` where it applies):
   signature over the signed attributes — and rejects tampered content and a flipped bit.
 - **Fuzzing**: `FuzzVerify` (arbitrary bytes into `Verify`, `VerifyAsSigned` and
   `SigningTime`; a mutated signature must not verify different content) ran 13.6M
-  executions in 60 s with no panic, hang or such verification. The one input class it is
-  not expected to reach is the attribute-strip case described under Security notes, which
-  `Verify` accepts by design.
+  executions in 60 s before the audit fixes and 10.5M in 45 s after them, with no panic,
+  hang or such verification.
 - **End to end**: signing and re-parsing a real KSK-2017 `root-anchors.xml` through
   `Verify` yields the published trust-anchor digest (reported by a downstream consumer's
   tests; not reproduced in this repo).
@@ -159,53 +159,43 @@ must verify outside this package — every key type and hash was affected.
 - Bootstrap trust still originates out-of-band: the root pool passed to `Verify`
   must arrive through a trusted channel (shipped with the binary or the OS store).
   CMS moves the trust root; it does not remove it.
-- Signed attributes are checked when present: `messageDigest` must equal `H(content)`,
-  the `contentType` attribute must match the encapsulated content type, and the signature
-  is verified over the DER `SET OF` attributes (RFC 5652 §5.4). A SignerInfo with **no**
-  signed attributes is also accepted — RFC 5652 §5.3 allows it for id-data — and its
-  signature is then verified directly over the content (Ed25519) or its digest (RSA and
-  ECDSA), with neither attribute checked. A signature made with attributes can therefore
-  be turned into a valid no-attributes signature over the attribute bytes themselves, so
-  do not accept arbitrary bytes as content from an untrusted party.
+- Signed attributes are required (RFC 5652 lets id-data omit them; `Verify` does not):
+  `messageDigest` must equal `H(content)`, `contentType` must be `id-data`, each of these and
+  `signingTime` may appear once with one value, and the signature is verified over the DER
+  `SET OF` attributes (RFC 5652 §5.4). Without this rule, stripping the attributes from a
+  genuine signature left a valid signature over the attribute bytes themselves.
+- Only `id-data` content is accepted, as the encapsulated type and as the `contentType`
+  attribute.
 - Treat **any non-nil error** from `Verify` as "not authentic". `errors.Is(err, ErrVerify)`
   additionally says that the signature parsed and had signers and that verification ran and
   failed (the wrapped cause says which check, and with several signers it is the last signer's).
-  It is not set for input that could not be read as a signature: a parse error,
-  `ErrNotSignedData`, `ErrNoSigners`, a malformed certificate in the bundle, or
-  `VerifyAsSigned` failing before verification starts.
-- **`VerifyAsSigned` is unsafe on a signature an untrusted party could have altered.** It takes
-  its time anchor from the *first* SignerInfo before any signer is verified, so a party with no
-  key can prepend a SignerInfo that does not verify, carrying a backdated `signingTime`, and a
-  signature whose certificate has expired then verifies (`Verify` at the current time rejects
-  it). The result lists only the signer that verified, so the extra SignerInfo is invisible
-  afterwards. A key holder can also claim any time inside the certificate's validity window.
-  Use `Verify` at the current time for anything that can be tampered with; see the audit
-  (`docs/audits/audit-findings.md`, D-3), where fixing it is awaiting a decision.
-- Pass a **non-nil** roots pool. A nil `x509.VerifyOptions.Roots` means the operating
-  system's trust store, so a caller whose pool failed to load would silently trust every
-  public CA. The default key usage is `ExtKeyUsageAny` and the `digitalSignature` key-usage
-  bit is not checked: any certificate under your roots can sign. Constrain it through
-  `VerifyWith` (for example `ExtKeyUsageCodeSigning`) when the roots issue other kinds.
-- `Verify` returns one entry per verified SignerInfo, so a signature that repeats one
-  SignerInfo returns the same certificate repeatedly; count distinct certificates, not
-  `len(signers)`.
-- **A hostile signature can still cost a lot of CPU, and bounding `len(sig)` does not bound
-  it.** The content is hashed once per digest algorithm and each *distinct* certificate's chain
-  is built once per call, but signatures are checked per SignerInfo and every distinct signer
-  certificate gets its own chain build. A bundle of 100 same-subject P-521
-  intermediates costs about 110 ms per additional signer certificate (20 signers: 2.2 s for a
-  59 KB signature over one byte of content; linear); an Ed25519 signer without
-  signed attributes verifies over the whole content each time (about 11 ms per 16 MiB). The
-  library does not cap SignerInfos or signer certificates (awaiting a decision, audit D-2), so
-  verify untrusted signatures in a resource-limited worker with a deadline.
-- Input is parsed as DER-ish, not validated as canonical DER: indefinite-length BER is
-  rejected, but a `SET OF` in non-DER order, unsigned fields (versions, `digestAlgorithms`, the
-  `signatureAlgorithm` OID) and trailing bytes after the `ContentInfo` are tolerated, so a
-  `.p7s` file can be altered without breaking its verification. Do not use the signature's
-  bytes as an identity.
-- `Verify` does not require the `contentType` signed attribute, or the encapsulated content
-  type, to be `id-data`: a signature whose content type is another OID (for example a timestamp
-  token's) verifies.
+  It is not set for input that could not be read as a signature this package accepts: a parse
+  error, trailing data, `ErrNotSignedData`, `ErrNoSigners`, more than eight SignerInfos, content
+  that is not `id-data`, a malformed certificate in the bundle, or a nil root pool.
+- `VerifyAsSigned` checks each signer's chain at that signer's own `signingTime` (or its
+  certificate's `NotBefore`), read only after that signer's signature has verified, so no other
+  SignerInfo can move it. A zero time is refused. The time is still the signer's claim, not a
+  time authority's: a key holder, including one whose key has expired or been compromised, can
+  sign new content claiming any time inside the certificate's validity window. Pair it with a
+  revocation or known-good-floor policy.
+- The root pool must be **non-nil**: a nil pool is refused, where `x509.VerifyOptions` would
+  read it as the operating system's trust store. To trust the system store, pass
+  `x509.SystemCertPool()`.
+- A signer certificate whose key-usage extension is present must allow `digitalSignature` or
+  `contentCommitment`. The extended key usage defaults to `ExtKeyUsageAny`, so any certificate
+  under your roots with a suitable key usage can sign; constrain it through `VerifyWith` (for
+  example `ExtKeyUsageCodeSigning`) when the roots issue other kinds.
+- `Verify` returns each verified certificate once, however many SignerInfos it verified under.
+- **Work per signature is capped.** At most eight SignerInfos, refused before they are decoded;
+  at most four bundle certificates tried per signer identifier; at most eight distinct chain
+  builds per call. The content is hashed once per digest algorithm. The audit measured a hostile
+  chain build (100 same-subject P-521 intermediates in the bundle) at about 110 ms, so the cap
+  bounds that case near 0.9 s (inferred from that measurement, not re-measured here). That is
+  still worth a deadline for untrusted input at volume.
+- Input is parsed as DER-ish, not validated as canonical DER: indefinite-length BER and
+  trailing data are rejected, but a `SET OF` in non-DER order and unsigned fields (versions,
+  `digestAlgorithms`, the `signatureAlgorithm` OID) are tolerated, so a `.p7s` file can be
+  altered without breaking its verification. Do not use the signature's bytes as an identity.
 
 ### Revocation
 

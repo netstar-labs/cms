@@ -31,16 +31,23 @@ signer chain so `Verify` can validate it against the caller's roots.
 
 ## Verify flow
 
-1. Parse `ContentInfo`; require `contentType == id-signedData`.
-2. Parse `SignedData`; extract the certificate set (`x509.ParseCertificate`).
+0. Refuse a nil root pool (`x509` would read it as the system trust store).
+1. Parse `ContentInfo`; require `contentType == id-signedData` and no trailing data.
+2. Parse `SignedData` with no trailing data; require the encapsulated content type to be
+   `id-data`; decode the SignerInfos one at a time, refusing a ninth; extract the
+   certificate set (`x509.ParseCertificate`, skipping context-tagged CertificateChoices
+   such as attribute certificates).
 3. For each `SignerInfo` (the content is hashed once per digest algorithm, and each
-   certificate's chain is verified once, however many SignerInfos repeat them):
-   1. **Resolve the signer certificate** by `IssuerAndSerialNumber` or, for the
-      `[0]` form, `SubjectKeyIdentifier`.
-   2. **Check the signed attributes** when present (RFC 5652 §5.4; a SignerInfo with
-      none is accepted and verified directly over the content): the `messageDigest`
-      attribute equals `H(content)` with the signer's digest algorithm, and the
-      `contentType` attribute value equals the encapsulated content type.
+   (certificate, time) chain is built once, at most eight per call):
+   1. **Check the signed attributes**, which are required (RFC 5652 §5.4): the
+      `messageDigest` attribute equals `H(content)` with the signer's digest algorithm,
+      the `contentType` attribute is `id-data`, and each of these and `signingTime`
+      appears once with one value.
+   2. **Resolve the signer certificate** by `IssuerAndSerialNumber` or, for the
+      `[0]` form, a non-empty `SubjectKeyIdentifier`. Every matching bundle
+      certificate, up to four, is tried in order for steps 3 and 4; a certificate whose
+      key-usage extension allows neither `digitalSignature` nor `contentCommitment` is
+      skipped.
    3. **Verify the signature over the signed attributes.** The attributes are
       stored `[0] IMPLICIT` but signed as a universal `SET OF`; the tag byte is
       swapped from `0xA0` to `0x31` (IMPLICIT tagging replaces only the tag, so
@@ -52,25 +59,21 @@ signer chain so `Verify` can validate it against the caller's roots.
       `VerifyWith` lets the caller control roots, intermediates, key usages, and
       time. Certificates carried in the SignedData are added as intermediates
       when the caller supplies none, so leaf→intermediate→root chains verify.
-4. Succeed if any signer verifies; return the verified certificates. Revocation
-   is a caller step on the returned certificate (see the trade-off table).
+4. Succeed if any signer verifies; return the verified certificates, each once.
+   Revocation is a caller step on the returned certificate (see the trade-off table).
 
-`VerifyAsSigned` is the same flow with the chain clock set to the signed
-`signingTime` (or the signer's `NotBefore` when absent) instead of the wall clock,
-so a write-once resource stays verifiable after a short signing leaf expires — the
-signature over immutable bytes is a timeless fact. It parses the first signer's
-signed attributes up front to read that time; `SigningTime` exposes the same value
-(trustworthy only once verification succeeds). `signingTime` is a signed attribute, so
-it cannot be altered without the signer's key, but it is asserted by the signer rather
-than attested by a time authority: a holder of the key — an expired or compromised one
-included — can sign new content claiming a time inside the certificate's validity window,
-or omit it to anchor at `NotBefore`. `VerifyAsSigned` shows the signature verifies with a
-key that was valid at the claimed time, not that signing happened then. The anchor is the
-first signer's, read before any signer is verified, so a keyless attacker can prepend a junk
-SignerInfo with a backdated time and make an expired signer verify (the result lists only the
-verified signer). Do not use `VerifyAsSigned` on a signature an untrusted party could have
-altered; use `Verify` at the current time there (audit-findings D-3). Pair it with a
-revocation or known-good-floor policy.
+`VerifyAsSigned` is the same flow with each signer's chain clock set to that signer's own
+signed `signingTime` (or its certificate's `NotBefore` when absent) instead of the wall
+clock, so a write-once resource stays verifiable after a short signing leaf expires — the
+signature over immutable bytes is a timeless fact. The time is read in step 3, only after
+that signer's signature over its attributes has verified, so no other SignerInfo can choose
+it; a zero time is refused. `SigningTime` exposes the first signer's value (trustworthy only
+once verification succeeds). `signingTime` is asserted by the signer rather than attested by
+a time authority: a holder of the key — an expired or compromised one included — can sign new
+content claiming a time inside the certificate's validity window, or omit it to anchor at
+`NotBefore`. `VerifyAsSigned` shows the signature verifies with a key that was valid at the
+claimed time, not that signing happened then. Pair it with a revocation or known-good-floor
+policy.
 
 ## Sign flow
 
@@ -87,7 +90,8 @@ signs the `SET OF` itself, with SHA-512 as the digest algorithm), and assemble
 |---|---|---|
 | Signed-attrs re-encoding | Swap `0xA0`→`0x31` on the captured bytes | The exact bytes the signer hashed; avoids re-marshal drift |
 | SET OF ordering (Sign) | Sort attribute encodings before concatenating | DER `SET OF` requires sorted elements (interop) |
-| Signature algorithm | Chosen from the signer's public-key type; digest from `digestAlgorithm` | Matches how CMS separates digest and signature algorithms |
+| Signature algorithm | Verify: chosen from the signer's public-key type, digest from `digestAlgorithm`. Sign: writes `rsaEncryption` + NULL, `ecdsa-with-SHA*`, or `id-Ed25519` | Matches how CMS separates digest and signature algorithms; the written identifiers are what RFC 3370, 5753 and 8419 name and what OpenSSL writes |
+| Work limits | 8 SignerInfos, 4 candidate certificates per signer, 8 chain builds per call | A hostile signature cannot buy CPU or memory in proportion to its size |
 | Ed25519 digest | SHA-512 only, in `Sign` and `Verify` | RFC 8419 §3.1 fixes it; accepting another would let a weaker `messageDigest` stand behind an Ed25519 signature |
 | Revocation | Not checked; a caller step on the returned signer cert (CRL/OCSP) | Go's `x509.VerifyOptions` has no revocation facility, and revocation policy is caller territory — keeps the package focused (see README §Revocation, `example/revoke`) |
 | Content in memory | `[]byte` content and signature | Root-anchors and manifests are small; streaming is unneeded |

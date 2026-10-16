@@ -8,7 +8,7 @@ Toolchain: go1.27.2 darwin/arm64 (go.mod `go 1.26`), Apple M2 Pro; every command
 The library does what its documentation says once the documentation is corrected. The branch's two commits are sound: the
 digestAlgorithms fix is verified against three openssl builds, and Ed25519 interoperates with OpenSSL 3.5.0 in both directions.
 One defect in the delta (the interop test itself) and four pre-existing defects were fixed; the pre-existing items that change
-what `Verify` accepts or what `Sign` writes (D-1…D-11, D-14) are left for the owner's decision. Performance is dominated by signature and chain
+what `Verify` accepts or what `Sign` writes (D-1…D-11, D-14) were then approved by the owner and fixed (`9be6a7c` to `0aff25a`). Performance is dominated by signature and chain
 verification; nothing needed optimizing except a per-signer rehash that was a denial-of-service vector (fixed for repeated signers; distinct-certificate amplification remains, D-2c).
 
 ## 1. Code verification against documentation
@@ -56,13 +56,14 @@ about 7–12% of `Verify` (4.5 µs of 35–65 µs). The `VerifyAsSigned` double 
 | Candidate | Impact | Status |
 |---|---|---|
 | Hash content once per algorithm; verify each distinct certificate once | 100× on repeated-signer input; single-signer path within noise | **Done** (F-3) |
-| Cap SignerInfos and distinct signer certificates | closes D-2b and D-2c (~110 ms per signer certificate with decoy intermediates) | **Decision** (D-2) |
+| Cap SignerInfos and distinct signer certificates | closes D-2b and D-2c (~110 ms per signer certificate with decoy intermediates) | **Done** (`51b5b9d`): 8 SignerInfos, 4 candidates, 8 chain builds |
+| Count repeated attributes without a map | −7 allocations per `Verify` with signingTime | **Done** (`0aff25a`) |
 | Avoid the `VerifyAsSigned` double parse | ~4 µs | not worth it |
 | Hot-path allocations | none flagged; `Verify` makes 4 more allocations since F-3 (two small maps) | accepted |
 
 ## 6. Success metrics
 
-Statement coverage 80.3% → 88.6%; fuzz targets 0 → 1; benchmarks 0 → 4 families; confirmed doc drifts 10 → 0 open; panics reachable
+Statement coverage 80.3% → 88.6% → 91.6%; fuzz targets 0 → 1; benchmarks 0 → 4 families; confirmed doc drifts 10 → 0 open; panics reachable
 from `Sign` caller input 5 → 0; repeated-signer verification cost linear → near-constant for signed-attribute signers.
 
 ## Self-check
